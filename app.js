@@ -38,10 +38,10 @@ async function iniciarApp() {
 
 async function garantirPerfil() {
   const { data, error } = await supabaseClient
-    .from('profiles').select('saldo_atual').eq('id', currentUser.id).maybeSingle();
+    .from('fin_profiles').select('saldo_atual').eq('id', currentUser.id).maybeSingle();
   if (error) { console.error(error); return; }
   if (!data) {
-    await supabaseClient.from('profiles').insert({ id: currentUser.id, saldo_atual: 0 });
+    await supabaseClient.from('fin_profiles').insert({ id: currentUser.id, saldo_atual: 0 });
     state.saldo = 0;
   } else {
     state.saldo = Number(data.saldo_atual) || 0;
@@ -49,7 +49,7 @@ async function garantirPerfil() {
 }
 
 async function carregarCategorias() {
-  const { data, error } = await supabaseClient.from('categorias').select('id,nome,tipo');
+  const { data, error } = await supabaseClient.from('fin_categorias').select('id,nome,tipo');
   if (error) { console.error(error); return; }
   state.categoriasMap = {};
   (data || []).forEach(c => { state.categoriasMap[c.id] = c; });
@@ -59,7 +59,7 @@ async function getOrCreateCategoria(nome, tipo) {
   const existente = Object.entries(state.categoriasMap).find(([, c]) => c.nome === nome && c.tipo === tipo);
   if (existente) return existente[0];
   const { data, error } = await supabaseClient
-    .from('categorias').insert({ user_id: currentUser.id, nome, tipo }).select('id,nome,tipo').single();
+    .from('fin_categorias').insert({ user_id: currentUser.id, nome, tipo }).select('id,nome,tipo').single();
   if (error) { console.error(error); return null; }
   state.categoriasMap[data.id] = data;
   return data.id;
@@ -67,21 +67,21 @@ async function getOrCreateCategoria(nome, tipo) {
 
 async function carregarContas() {
   const { data, error } = await supabaseClient
-    .from('contas').select('*').eq('ativa', true).order('dia_vencimento', { ascending: true });
+    .from('fin_contas').select('*').eq('ativa', true).order('dia_vencimento', { ascending: true });
   if (error) { console.error(error); return; }
   state.contas = data || [];
 }
 
 async function carregarLancamentos() {
   const { data, error } = await supabaseClient
-    .from('lancamentos').select('*').order('data', { ascending: false }).limit(50);
+    .from('fin_lancamentos').select('*').order('data', { ascending: false }).limit(50);
   if (error) { console.error(error); return; }
   state.lancamentos = data || [];
 }
 
 async function carregarCartoes() {
   const { data, error } = await supabaseClient
-    .from('cartoes').select('*').order('created_at', { ascending: true });
+    .from('fin_cartoes').select('*').order('created_at', { ascending: true });
   if (error) { console.error(error); return; }
   state.cartoes = data || [];
 }
@@ -100,7 +100,7 @@ async function editarSaldo() {
   const novo = prompt('Novo saldo em conta:', state.saldo);
   if (novo !== null && !isNaN(parseFloat(novo))) {
     state.saldo = parseFloat(novo);
-    await supabaseClient.from('profiles').update({ saldo_atual: state.saldo }).eq('id', currentUser.id);
+    await supabaseClient.from('fin_profiles').update({ saldo_atual: state.saldo }).eq('id', currentUser.id);
     renderAll();
   }
 }
@@ -125,7 +125,7 @@ async function adicionarLancamento(e) {
     status: 'pago',
     data: document.getElementById('lData').value || new Date().toISOString().slice(0, 10),
   };
-  const { data, error } = await supabaseClient.from('lancamentos').insert(registro).select().single();
+  const { data, error } = await supabaseClient.from('fin_lancamentos').insert(registro).select().single();
   if (error) { alert('Erro ao salvar: ' + error.message); return false; }
   state.lancamentos.unshift(data);
   e.target.reset();
@@ -136,7 +136,7 @@ async function adicionarLancamento(e) {
 }
 
 async function removerLancamento(id) {
-  const { error } = await supabaseClient.from('lancamentos').delete().eq('id', id);
+  const { error } = await supabaseClient.from('fin_lancamentos').delete().eq('id', id);
   if (error) { alert('Erro ao remover: ' + error.message); return; }
   state.lancamentos = state.lancamentos.filter(l => l.id !== id);
   renderAll();
@@ -157,7 +157,7 @@ async function adicionarConta(e) {
     pago: false,
     ativa: true,
   };
-  const { data, error } = await supabaseClient.from('contas').insert(registro).select().single();
+  const { data, error } = await supabaseClient.from('fin_contas').insert(registro).select().single();
   if (error) { alert('Erro ao salvar: ' + error.message); return false; }
   state.contas.push(data);
   e.target.reset();
@@ -170,13 +170,13 @@ async function toggleContaPaga(id) {
   const conta = state.contas.find(c => c.id === id);
   if (!conta) return;
   conta.pago = !conta.pago;
-  const { error } = await supabaseClient.from('contas').update({ pago: conta.pago }).eq('id', id);
+  const { error } = await supabaseClient.from('fin_contas').update({ pago: conta.pago }).eq('id', id);
   if (error) { alert('Erro ao atualizar: ' + error.message); conta.pago = !conta.pago; return; }
   renderAll();
 }
 
 async function removerConta(id) {
-  const { error } = await supabaseClient.from('contas').update({ ativa: false }).eq('id', id);
+  const { error } = await supabaseClient.from('fin_contas').update({ ativa: false }).eq('id', id);
   if (error) { alert('Erro ao remover: ' + error.message); return; }
   state.contas = state.contas.filter(c => c.id !== id);
   renderAll();
@@ -193,7 +193,7 @@ async function adicionarCartao(e) {
     origem: 'manual',
     atualizado_em: new Date().toISOString(),
   };
-  const { data, error } = await supabaseClient.from('cartoes').insert(registro).select().single();
+  const { data, error } = await supabaseClient.from('fin_cartoes').insert(registro).select().single();
   if (error) { alert('Erro ao salvar: ' + error.message); return false; }
   state.cartoes.push(data);
   e.target.reset();
@@ -202,7 +202,7 @@ async function adicionarCartao(e) {
 }
 
 async function removerCartao(id) {
-  const { error } = await supabaseClient.from('cartoes').delete().eq('id', id);
+  const { error } = await supabaseClient.from('fin_cartoes').delete().eq('id', id);
   if (error) { alert('Erro ao remover: ' + error.message); return; }
   state.cartoes = state.cartoes.filter(c => c.id !== id);
   renderAll();
@@ -210,7 +210,7 @@ async function removerCartao(id) {
 
 // ---------- Pluggy (Open Finance) — chamado por pluggy-connect-client.js ----------
 async function salvarContasPluggy(itemId, instituicao, accounts) {
-  await supabaseClient.from('pluggy_items').upsert(
+  await supabaseClient.from('fin_pluggy_items').upsert(
     { user_id: currentUser.id, item_id: itemId, instituicao, status: 'ativo', atualizado_em: new Date().toISOString() },
     { onConflict: 'item_id' }
   );
@@ -231,20 +231,20 @@ async function salvarContasPluggy(itemId, instituicao, accounts) {
     };
 
     const { data: existente } = await supabaseClient
-      .from('cartoes').select('id').eq('pluggy_account_id', acc.id).maybeSingle();
+      .from('fin_cartoes').select('id').eq('pluggy_account_id', acc.id).maybeSingle();
 
     let linha;
     if (existente) {
-      const { data } = await supabaseClient.from('cartoes').update(registro).eq('id', existente.id).select().single();
+      const { data } = await supabaseClient.from('fin_cartoes').update(registro).eq('id', existente.id).select().single();
       linha = data;
       state.cartoes = state.cartoes.map(c => c.id === linha.id ? linha : c);
     } else {
-      const { data } = await supabaseClient.from('cartoes').insert(registro).select().single();
+      const { data } = await supabaseClient.from('fin_cartoes').insert(registro).select().single();
       linha = data;
       state.cartoes.push(linha);
     }
 
-    await supabaseClient.from('saldos').insert({
+    await supabaseClient.from('fin_saldos').insert({
       user_id: currentUser.id, cartao_id: linha.id, valor: acc.balance,
       origem: 'open_finance', pluggy_account_id: acc.id,
     });

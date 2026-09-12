@@ -7,7 +7,7 @@
 -- ============================================================
 
 -- 1) PERFIL -------------------------------------------------------
-create table if not exists profiles (
+create table if not exists fin_profiles (
   id uuid references auth.users on delete cascade primary key,
   nome text,
   salario_mensal numeric(12,2) default 0,
@@ -16,7 +16,7 @@ create table if not exists profiles (
 );
 
 -- 2) CATEGORIAS -----------------------------------------------------
-create table if not exists categorias (
+create table if not exists fin_categorias (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete cascade,
   nome text not null,
@@ -26,12 +26,12 @@ create table if not exists categorias (
 );
 
 -- 3) CONTAS FIXAS / RECORRENTES (aluguel, energia, assinaturas) -----
-create table if not exists contas (
+create table if not exists fin_contas (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete cascade,
   nome text not null,
   valor numeric(12,2) not null,
-  categoria_id uuid references categorias(id),
+  categoria_id uuid references fin_categorias(id),
   dia_vencimento int check (dia_vencimento between 1 and 31),
   frequencia text check (frequencia in ('mensal','semanal','anual','unica')) default 'mensal',
   alerta_dias_antes int default 3,
@@ -41,11 +41,11 @@ create table if not exists contas (
 );
 
 -- 4) LANÇAMENTOS (gastos e receitas do dia a dia) --------------------
-create table if not exists lancamentos (
+create table if not exists fin_lancamentos (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete cascade,
-  conta_id uuid references contas(id) on delete set null,
-  categoria_id uuid references categorias(id) on delete set null,
+  conta_id uuid references fin_contas(id) on delete set null,
+  categoria_id uuid references fin_categorias(id) on delete set null,
   descricao text not null,
   valor numeric(12,2) not null,
   tipo text check (tipo in ('receita','despesa')) not null,
@@ -56,7 +56,7 @@ create table if not exists lancamentos (
 );
 
 -- 5) CARTÕES E CONTAS BANCÁRIAS (manual ou via Open Finance/Pluggy) --
-create table if not exists cartoes (
+create table if not exists fin_cartoes (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete cascade,
   nome text not null,
@@ -74,10 +74,10 @@ create table if not exists cartoes (
 );
 
 -- 6) SALDOS (histórico — manual ou vindo do Pluggy/Open Finance) -----
-create table if not exists saldos (
+create table if not exists fin_saldos (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete cascade,
-  cartao_id uuid references cartoes(id) on delete cascade,
+  cartao_id uuid references fin_cartoes(id) on delete cascade,
   valor numeric(12,2) not null,
   origem text check (origem in ('manual','open_finance')) default 'manual',
   pluggy_account_id text,
@@ -85,7 +85,7 @@ create table if not exists saldos (
 );
 
 -- 7) ITENS PLUGGY (uma "conexão" com um banco via Open Finance) -----
-create table if not exists pluggy_items (
+create table if not exists fin_pluggy_items (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete cascade,
   item_id text not null unique,
@@ -99,47 +99,47 @@ create table if not exists pluggy_items (
 -- SEGURANÇA: cada usuário logado só enxerga os próprios dados.
 -- Como vocês usam o MESMO login, os dois enxergam os mesmos dados.
 -- ============================================================
-alter table profiles enable row level security;
-alter table categorias enable row level security;
-alter table contas enable row level security;
-alter table lancamentos enable row level security;
-alter table cartoes enable row level security;
-alter table saldos enable row level security;
-alter table pluggy_items enable row level security;
+alter table fin_profiles enable row level security;
+alter table fin_categorias enable row level security;
+alter table fin_contas enable row level security;
+alter table fin_lancamentos enable row level security;
+alter table fin_cartoes enable row level security;
+alter table fin_saldos enable row level security;
+alter table fin_pluggy_items enable row level security;
 
-drop policy if exists "usuario ve seu proprio perfil" on profiles;
-create policy "usuario ve seu proprio perfil" on profiles
+drop policy if exists "usuario ve seu proprio perfil" on fin_profiles;
+create policy "usuario ve seu proprio perfil" on fin_profiles
   for all using (auth.uid() = id) with check (auth.uid() = id);
 
-drop policy if exists "usuario gerencia suas categorias" on categorias;
-create policy "usuario gerencia suas categorias" on categorias
+drop policy if exists "usuario gerencia suas fin_categorias" on fin_categorias;
+create policy "usuario gerencia suas fin_categorias" on fin_categorias
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-drop policy if exists "usuario gerencia suas contas" on contas;
-create policy "usuario gerencia suas contas" on contas
+drop policy if exists "usuario gerencia suas fin_contas" on fin_contas;
+create policy "usuario gerencia suas fin_contas" on fin_contas
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-drop policy if exists "usuario gerencia seus lancamentos" on lancamentos;
-create policy "usuario gerencia seus lancamentos" on lancamentos
+drop policy if exists "usuario gerencia seus fin_lancamentos" on fin_lancamentos;
+create policy "usuario gerencia seus fin_lancamentos" on fin_lancamentos
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-drop policy if exists "usuario gerencia seus cartoes" on cartoes;
-create policy "usuario gerencia seus cartoes" on cartoes
+drop policy if exists "usuario gerencia seus fin_cartoes" on fin_cartoes;
+create policy "usuario gerencia seus fin_cartoes" on fin_cartoes
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-drop policy if exists "usuario gerencia seus saldos" on saldos;
-create policy "usuario gerencia seus saldos" on saldos
+drop policy if exists "usuario gerencia seus fin_saldos" on fin_saldos;
+create policy "usuario gerencia seus fin_saldos" on fin_saldos
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-drop policy if exists "usuario gerencia seus items pluggy" on pluggy_items;
-create policy "usuario gerencia seus items pluggy" on pluggy_items
+drop policy if exists "usuario gerencia seus items pluggy" on fin_pluggy_items;
+create policy "usuario gerencia seus items pluggy" on fin_pluggy_items
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- ============================================================
 -- Dica de uso:
--- - "contas"      = despesas fixas/recorrentes (gera o alerta de vencimento)
--- - "lancamentos" = gastos e receitas do dia a dia
--- - "cartoes"     = contas bancárias e cartões (manual ou conectado via Pluggy)
--- - "saldos"      = histórico de saldo de cada cartão/conta
--- - "pluggy_items"= cada conexão feita com um banco via Open Finance
+-- - "fin_contas"      = despesas fixas/recorrentes (gera o alerta de vencimento)
+-- - "fin_lancamentos" = gastos e receitas do dia a dia
+-- - "fin_cartoes"     = contas bancárias e cartões (manual ou conectado via Pluggy)
+-- - "fin_saldos"      = histórico de saldo de cada cartão/conta
+-- - "fin_pluggy_items"= cada conexão feita com um banco via Open Finance
 -- ============================================================
