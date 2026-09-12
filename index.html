@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meu Financeiro</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#123524">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- TELA DE LOGIN -->
+<div class="auth-wrap" id="auth-wrap">
+  <h1>Meu Financeiro</h1>
+  <p class="sub">Login único, compartilhado entre vocês dois.</p>
+  <div class="auth-tabs">
+    <button type="button" id="authTabLogin" class="active" onclick="setAuthTab('login')">Entrar</button>
+    <button type="button" id="authTabSignup" onclick="setAuthTab('signup')">Criar conta</button>
+  </div>
+  <div class="auth-error" id="authError"></div>
+  <form id="authForm" onsubmit="return submitAuth(event)">
+    <div>
+      <label>E-mail</label>
+      <input type="email" id="authEmail" required autocomplete="email">
+    </div>
+    <div>
+      <label>Senha</label>
+      <input type="password" id="authPassword" required autocomplete="current-password" minlength="6">
+    </div>
+    <button class="btn-primary" type="submit" id="authSubmitBtn">Entrar</button>
+  </form>
+  <p class="sub" id="authHint">Esqueceu a senha? Peça pra recriar a conta no Supabase por enquanto — recuperação por e-mail ainda não está configurada.</p>
+</div>
+
+<!-- APP -->
+<div class="phone hidden" id="app">
+
+  <div class="topbar">
+    <div>
+      <p class="label">Saldo em conta</p>
+      <h1 id="saldoDisplay">R$ 0</h1>
+    </div>
+    <div class="topbar-actions">
+      <button class="pill" onclick="editarSaldo()">Ajustar saldo</button>
+      <button class="pill logout" onclick="logout()">Sair</button>
+    </div>
+  </div>
+
+  <!-- TELA: DASHBOARD -->
+  <div class="screen" id="tela-dashboard">
+    <div class="cardgrid">
+      <div class="metric warn">
+        <p class="m-label">A pagar este mês</p>
+        <p class="m-value" id="totalAPagar">—</p>
+      </div>
+      <div class="metric">
+        <p class="m-label">Já pago</p>
+        <p class="m-value" id="totalPago">—</p>
+      </div>
+    </div>
+    <div class="metric" id="saldoProjetadoCard" style="margin-bottom:4px;">
+      <p class="m-label">Saldo projetado após pagar tudo</p>
+      <p class="m-value" id="saldoProjetado">—</p>
+    </div>
+
+    <h2 class="section">Próximos vencimentos</h2>
+    <div id="listaVencimentos"></div>
+
+    <div class="simbox">
+      <p class="title">Se eu gastar mais isso este mês…</p>
+      <div class="row">
+        <input type="number" id="simInput" placeholder="Ex: 300" oninput="simular()">
+      </div>
+      <div class="result" id="simResult">Digite um valor para simular.</div>
+    </div>
+  </div>
+
+  <!-- TELA: LANÇAR GASTO -->
+  <div class="screen hidden" id="tela-lancar">
+    <h2 class="section" style="margin-top:0;">Novo lançamento</h2>
+    <form onsubmit="return adicionarLancamento(event)">
+      <div>
+        <label>Tipo</label>
+        <div class="toggle-row">
+          <button type="button" id="tipoDespesaBtn" class="active" onclick="setTipoLancamento('despesa')">Gasto</button>
+          <button type="button" id="tipoReceitaBtn" onclick="setTipoLancamento('receita')">Receita</button>
+        </div>
+      </div>
+      <div>
+        <label>Descrição</label>
+        <input type="text" id="lDesc" placeholder="Ex: Mercado, Uber, freela" required>
+      </div>
+      <div>
+        <label>Valor (R$)</label>
+        <input type="number" step="0.01" id="lValor" placeholder="Ex: 85" required>
+      </div>
+      <div>
+        <label>Categoria</label>
+        <select id="lCategoria">
+          <option>Alimentação</option>
+          <option>Transporte</option>
+          <option>Lazer</option>
+          <option>Saúde</option>
+          <option>Casa</option>
+          <option>Outros</option>
+        </select>
+      </div>
+      <div>
+        <label>Data</label>
+        <input type="date" id="lData" required>
+      </div>
+      <button class="btn-primary" type="submit">Adicionar lançamento</button>
+    </form>
+
+    <h2 class="section">Lançamentos recentes</h2>
+    <div id="listaLancamentos"></div>
+  </div>
+
+  <!-- TELA: CONTAS FIXAS -->
+  <div class="screen hidden" id="tela-contas">
+    <h2 class="section" style="margin-top:0;">Cadastrar conta fixa</h2>
+    <form onsubmit="return adicionarConta(event)">
+      <div>
+        <label>Nome da conta</label>
+        <input type="text" id="cNome" placeholder="Ex: Energia, Aluguel, Internet" required>
+      </div>
+      <div>
+        <label>Valor (R$)</label>
+        <input type="number" step="0.01" id="cValor" placeholder="Ex: 210" required>
+      </div>
+      <div>
+        <label>Dia do vencimento</label>
+        <input type="number" id="cDia" min="1" max="31" placeholder="Ex: 15" required>
+      </div>
+      <div>
+        <label>Categoria</label>
+        <select id="cCategoria">
+          <option>Moradia</option>
+          <option>Utilidades</option>
+          <option>Cartão de crédito</option>
+          <option>Assinatura</option>
+          <option>Outros</option>
+        </select>
+      </div>
+      <div>
+        <label>Alertar quantos dias antes do vencimento?</label>
+        <input type="number" id="cAlerta" value="3" min="0" max="15">
+      </div>
+      <button class="btn-primary" type="submit">Salvar conta</button>
+    </form>
+
+    <h2 class="section">Contas fixas cadastradas</h2>
+    <div id="listaContas"></div>
+  </div>
+
+  <!-- TELA: CARTÕES E CONTAS BANCÁRIAS -->
+  <div class="screen hidden" id="tela-cartoes">
+    <h2 class="section" style="margin-top:0;">Conectar banco automaticamente</h2>
+    <div class="simbox">
+      <p class="title">Open Finance (via Pluggy)</p>
+      <p class="sub" style="margin:0 0 12px; font-size:12.5px; color:var(--ink-soft);">
+        Conecta com seu banco de verdade e traz o saldo sozinho. Pede login/senha do banco
+        numa janela segura da própria Pluggy — a gente nunca vê essa senha.
+      </p>
+      <button class="btn-accent" id="btnConectarBanco" onclick="iniciarConexaoPluggy()" type="button">Conectar banco</button>
+      <p class="sub" id="pluggyStatus" style="margin:10px 0 0; font-size:12px;"></p>
+    </div>
+
+    <h2 class="section">Cadastrar manualmente</h2>
+    <form onsubmit="return adicionarCartao(event)">
+      <div>
+        <label>Nome</label>
+        <input type="text" id="caNome" placeholder="Ex: Nubank, Conta Corrente Itaú" required>
+      </div>
+      <div>
+        <label>Tipo</label>
+        <select id="caTipo">
+          <option value="cartao_credito">Cartão de crédito</option>
+          <option value="conta_corrente">Conta corrente</option>
+          <option value="poupanca">Poupança</option>
+          <option value="outro">Outro</option>
+        </select>
+      </div>
+      <div>
+        <label>Saldo / limite disponível (R$)</label>
+        <input type="number" step="0.01" id="caSaldo" placeholder="Ex: 1200" required>
+      </div>
+      <button class="btn-primary" type="submit">Salvar</button>
+    </form>
+
+    <h2 class="section">Suas contas e cartões</h2>
+    <div id="listaCartoes"></div>
+  </div>
+
+  <!-- TELA: PROJEÇÃO -->
+  <div class="screen hidden" id="tela-projecao">
+    <h2 class="section" style="margin-top:0;">Projeção financeira</h2>
+    <div class="period-toggle">
+      <button class="active" onclick="setPeriodo('semanal', this)">Semanal</button>
+      <button onclick="setPeriodo('mensal', this)">Mensal</button>
+      <button onclick="setPeriodo('anual', this)">Anual</button>
+    </div>
+    <div class="metric" style="margin-bottom:4px;">
+      <p class="m-label" id="projLabel">Saldo estimado nas próximas semanas</p>
+      <p class="m-value" id="projValor">—</p>
+    </div>
+    <div class="bars" id="bars"></div>
+    <p class="empty" id="projLegenda"></p>
+  </div>
+
+  <nav>
+    <button class="active" data-tela="dashboard" onclick="mudarTela('dashboard', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9h12v-9"/></svg>
+      Início
+    </button>
+    <button data-tela="lancar" onclick="mudarTela('lancar', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+      Lançar
+    </button>
+    <button data-tela="contas" onclick="mudarTela('contas', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/></svg>
+      Contas
+    </button>
+    <button data-tela="cartoes" onclick="mudarTela('cartoes', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+      Cartões
+    </button>
+    <button data-tela="projecao" onclick="mudarTela('projecao', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V10M11 19V5M18 19v-6"/></svg>
+      Projeção
+    </button>
+  </nav>
+</div>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="auth.js"></script>
+<script src="app.js"></script>
+<script type="module" src="pluggy-connect-client.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(console.error));
+}
+</script>
+</body>
+</html>
