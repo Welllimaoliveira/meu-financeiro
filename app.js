@@ -10,10 +10,15 @@ let state = {
   contas: [],
   lancamentos: [],
   cartoes: [],
+  parcelamentos: [],
+  parcelas: [],
   categoriasMap: {}, // id -> {nome, tipo}
 };
 let tipoLancamentoAtual = 'despesa';
 let periodoAtual = 'semanal';
+let tipoParcelamentoAtual = 'receber';
+let periodoRelatorioAtual = 'mes';
+let calcExpr = '';
 const fmt = v => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const hojeDia = new Date().getDate();
 const CORES_DOT = ['var(--danger)', 'var(--orange-600)', 'var(--green-600)', 'var(--ink-soft)'];
@@ -28,7 +33,7 @@ async function iniciarApp() {
 
   await garantirPerfil();
   await carregarCategorias();
-  await Promise.all([carregarContas(), carregarLancamentos(), carregarCartoes()]);
+  await Promise.all([carregarContas(), carregarLancamentos(), carregarCartoes(), carregarParcelamentos(), carregarParcelas()]);
 
   const lDataEl = document.getElementById('lData');
   if (lDataEl && !lDataEl.value) lDataEl.valueAsDate = new Date();
@@ -86,12 +91,26 @@ async function carregarCartoes() {
   state.cartoes = data || [];
 }
 
+async function carregarParcelamentos() {
+  const { data, error } = await supabaseClient
+    .from('fin_parcelamentos').select('*').order('created_at', { ascending: false });
+  if (error) { console.error(error); return; }
+  state.parcelamentos = data || [];
+}
+
+async function carregarParcelas() {
+  const { data, error } = await supabaseClient
+    .from('fin_parcelas').select('*').order('data_vencimento', { ascending: true });
+  if (error) { console.error(error); return; }
+  state.parcelas = data || [];
+}
+
 // ---------- Navegação ----------
 function mudarTela(nome, btn) {
   document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
   document.getElementById('tela-' + nome).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+  if (btn) btn.classList.add('active');
   renderAll();
 }
 
@@ -101,15 +120,45 @@ function toggleMenu() {
   document.getElementById('menuOverlay').classList.toggle('hidden');
 }
 
+// Força buscar a versão mais nova do app (código) e dos dados — resolve
+// quando alguém fica "preso" numa versão antiga por causa de cache do
+// navegador ou do service worker do PWA.
+async function atualizarApp() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+    if ('caches' in window) {
+      const chaves = await caches.keys();
+      await Promise.all(chaves.map(k => caches.delete(k)));
+    }
+  } catch (err) {
+    console.error('Erro ao limpar cache/service worker', err);
+  }
+  location.reload();
+}
+
+const MAPA_DETALHE_CARTOES = {
+  saldo: 'detalheSaldoCartoes',
+  devedor: 'detalheDevedorCartoes',
+  receber: 'detalheReceberPessoas',
+  pagarPessoas: 'detalhePagarPessoas',
+};
 function toggleDetalheCartoes(tipo) {
-  const id = tipo === 'saldo' ? 'detalheSaldoCartoes' : 'detalheDevedorCartoes';
-  document.getElementById(id).classList.toggle('hidden');
+  document.getElementById(MAPA_DETALHE_CARTOES[tipo]).classList.toggle('hidden');
+}
+
+// Troca de tela sem mexer no menu de cima (usado por botões fora do menu,
+// como o de Relatório na barra superior).
+function irPara(nome) {
+  const btn = document.querySelector('nav button[data-tela="' + nome + '"]');
+  mudarTela(nome, btn);
 }
 
 function navMenu(nome) {
-  const btn = document.querySelector('nav button[data-tela="' + nome + '"]');
-  if (btn) mudarTela(nome, btn);
-  toggleMenu();
+  irPara(nome);
+  document.getElementById('menuOverlay').classList.add('hidden');
 }
 
 // ---------- Saldo ----------
@@ -139,6 +188,7 @@ async function adicionarLancamento(e) {
     valor: parseFloat(document.getElementById('lValor').value),
     tipo: tipoLancamentoAtual,
     categoria_id: categoriaId,
+    cartao_id: document.getElementById('lCartao').value || null,
     status: 'pago',
     data: document.getElementById('lData').value || new Date().toISOString().slice(0, 10),
   };
@@ -180,27 +230,44 @@ async function editarLancamento(id) {
 }
 
 // ---------- Contas fixas ----------
+let contaEditandoId = null;
+
 async function adicionarConta(e) {
   e.preventDefault();
   const nomeCategoria = document.getElementById('cCategoria').value;
   const categoriaId = await getOrCreateCategoria(nomeCategoria, 'despesa');
-  const registro = {
-    user_id: currentUser.id,
+  const campos = {
     nome: document.getElementById('cNome').value,
     valor: parseFloat(document.getElementById('cValor').value),
     dia_vencimento: parseInt(document.getElementById('cDia').value, 10),
     categoria_id: categoriaId,
     alerta_dias_antes: parseInt(document.getElementById('cAlerta').value, 10) || 0,
-    pago: false,
-    ativa: true,
   };
-  const { data, error } = await supabaseClient.from('fin_contas').insert(registro).select().single();
-  if (error) { alert('Erro ao salvar: ' + error.message); return false; }
-  state.contas.push(data);
-  e.target.reset();
-  document.getElementById('cAlerta').value = 3;
+
+  if (contaEditandoId) {
+    const { data, error } = await supabaseClient.from('fin_contas').update(campos).eq('id', contaEditandoId).select().single();
+    if (error) { alert('Erro ao salvar: ' + error.message); return false; }
+    state.contas = state.contas.map(x => x.id === contaEditandoId ? data : x);
+    cancelarEdicaoConta();
+  } else {
+    const registro = { ...campos, user_id: currentUser.id, pago: false, ativa: true };
+    const { data, error } = await supabaseClient.from('fin_contas').insert(registro).select().single();
+    if (error) { alert('Erro ao salvar: ' + error.message); return false; }
+    state.contas.push(data);
+    e.target.reset();
+    document.getElementById('cAlerta').value = 3;
+  }
   renderAll();
   return false;
+}
+
+function cancelarEdicaoConta() {
+  contaEditandoId = null;
+  document.getElementById('contaFormTitulo').textContent = 'Cadastrar conta fixa';
+  document.getElementById('contaSubmitBtn').textContent = 'Salvar conta';
+  document.getElementById('contaCancelarBtn').classList.add('hidden');
+  document.querySelector('#tela-contas form').reset();
+  document.getElementById('cAlerta').value = 3;
 }
 
 async function toggleContaPaga(id) {
@@ -219,26 +286,24 @@ async function removerConta(id) {
   renderAll();
 }
 
-async function editarConta(id) {
+function editarConta(id) {
   const c = state.contas.find(x => x.id === id);
   if (!c) return;
+  const cat = state.categoriasMap[c.categoria_id];
 
-  const novoNome = prompt('Nome da conta:', c.nome);
-  if (novoNome === null) return;
-  const novoValorStr = prompt('Valor (R$):', c.valor);
-  if (novoValorStr === null) return;
-  const novoValor = parseFloat(novoValorStr.replace(',', '.'));
-  if (isNaN(novoValor)) { alert('Valor inválido.'); return; }
-  const novoDiaStr = prompt('Dia do vencimento (1-31):', c.dia_vencimento);
-  if (novoDiaStr === null) return;
-  const novoDia = parseInt(novoDiaStr, 10);
-  if (isNaN(novoDia) || novoDia < 1 || novoDia > 31) { alert('Dia inválido.'); return; }
+  contaEditandoId = id;
+  document.getElementById('cNome').value = c.nome;
+  document.getElementById('cValor').value = c.valor;
+  document.getElementById('cDia').value = c.dia_vencimento;
+  document.getElementById('cAlerta').value = c.alerta_dias_antes ?? 3;
+  const catSelect = document.getElementById('cCategoria');
+  catSelect.value = cat && [...catSelect.options].some(o => o.value === cat.nome) ? cat.nome : 'Outros';
 
-  const registro = { nome: novoNome, valor: novoValor, dia_vencimento: novoDia };
-  const { data, error } = await supabaseClient.from('fin_contas').update(registro).eq('id', id).select().single();
-  if (error) { alert('Erro ao salvar: ' + error.message); return; }
-  state.contas = state.contas.map(x => x.id === id ? data : x);
-  renderAll();
+  document.getElementById('contaFormTitulo').textContent = 'Editar conta fixa';
+  document.getElementById('contaSubmitBtn').textContent = 'Salvar edição';
+  document.getElementById('contaCancelarBtn').classList.remove('hidden');
+
+  document.querySelector('#tela-contas form').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ---------- Cartões / contas bancárias (manual) ----------
@@ -301,6 +366,289 @@ async function editarCartao(id) {
   if (error) { alert('Erro ao salvar: ' + error.message); return; }
   state.cartoes = state.cartoes.map(x => x.id === id ? data : x);
   renderAll();
+}
+
+// ---------- Parcelamentos (a receber/a pagar de pessoas, parcelado) ----------
+function setTipoParcelamento(tipo) {
+  tipoParcelamentoAtual = tipo;
+  document.getElementById('tipoReceberBtn').classList.toggle('active', tipo === 'receber');
+  document.getElementById('tipoPagarBtn').classList.toggle('active', tipo === 'pagar');
+}
+
+function atualizarPreviewParcelas() {
+  const total = parseFloat(document.getElementById('pcValorTotal').value);
+  const qtd = parseInt(document.getElementById('pcParcelas').value, 10);
+  const preview = document.getElementById('pcPreview');
+  if (!total || !qtd || qtd < 1) { preview.textContent = ''; return; }
+  preview.textContent = `${qtd}x de ${fmt(total / qtd)}`;
+}
+
+async function adicionarParcelamento(e) {
+  e.preventDefault();
+  const pessoa = document.getElementById('pcPessoa').value;
+  const descricao = document.getElementById('pcDescricao').value || null;
+  const valorTotal = parseFloat(document.getElementById('pcValorTotal').value);
+  const qtd = parseInt(document.getElementById('pcParcelas').value, 10);
+  const dataInicio = document.getElementById('pcDataInicio').value;
+
+  const registro = {
+    user_id: currentUser.id, pessoa, descricao, tipo: tipoParcelamentoAtual,
+    valor_total: valorTotal, quantidade_parcelas: qtd, data_inicio: dataInicio,
+  };
+  const { data: plano, error } = await supabaseClient.from('fin_parcelamentos').insert(registro).select().single();
+  if (error) { alert('Erro ao salvar: ' + error.message); return false; }
+  state.parcelamentos.unshift(plano);
+
+  // Parcelas iguais (total ÷ quantidade); a última absorve a sobra do
+  // arredondamento pra soma bater certinho com o valor total.
+  const valorBase = Math.round((valorTotal / qtd) * 100) / 100;
+  const linhas = [];
+  let somaParcial = 0;
+  for (let i = 1; i <= qtd; i++) {
+    const dataVenc = new Date(dataInicio + 'T00:00:00');
+    dataVenc.setMonth(dataVenc.getMonth() + (i - 1));
+    const valor = i === qtd ? Math.round((valorTotal - somaParcial) * 100) / 100 : valorBase;
+    somaParcial += valor;
+    linhas.push({
+      user_id: currentUser.id, parcelamento_id: plano.id, numero: i, valor,
+      data_vencimento: dataVenc.toISOString().slice(0, 10), pago: false,
+    });
+  }
+  const { data: parcelasCriadas, error: err2 } = await supabaseClient.from('fin_parcelas').insert(linhas).select();
+  if (err2) alert('O parcelamento foi salvo, mas houve erro ao criar as parcelas: ' + err2.message);
+  else state.parcelas.push(...parcelasCriadas);
+
+  e.target.reset();
+  document.getElementById('pcParcelas').value = 1;
+  document.getElementById('pcPreview').textContent = '';
+  setTipoParcelamento('receber');
+  renderAll();
+  return false;
+}
+
+async function toggleParcelaPaga(id) {
+  const p = state.parcelas.find(x => x.id === id);
+  if (!p) return;
+  p.pago = !p.pago;
+  const registro = { pago: p.pago, data_pagamento: p.pago ? new Date().toISOString().slice(0, 10) : null };
+  const { error } = await supabaseClient.from('fin_parcelas').update(registro).eq('id', id);
+  if (error) { alert('Erro ao atualizar: ' + error.message); p.pago = !p.pago; return; }
+  renderAll();
+}
+
+async function editarParcela(id) {
+  const p = state.parcelas.find(x => x.id === id);
+  if (!p) return;
+  const novoValorStr = prompt('Valor desta parcela (R$):', p.valor);
+  if (novoValorStr === null) return;
+  const novoValor = parseFloat(novoValorStr.replace(',', '.'));
+  if (isNaN(novoValor)) { alert('Valor inválido.'); return; }
+  const novaData = prompt('Data de vencimento (AAAA-MM-DD):', p.data_vencimento);
+  if (novaData === null) return;
+  const { data, error } = await supabaseClient.from('fin_parcelas').update({ valor: novoValor, data_vencimento: novaData }).eq('id', id).select().single();
+  if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  state.parcelas = state.parcelas.map(x => x.id === id ? data : x);
+  renderAll();
+}
+
+async function removerParcelamento(id) {
+  if (!confirm('Excluir esse parcelamento e todas as parcelas dele?')) return;
+  const { error } = await supabaseClient.from('fin_parcelamentos').delete().eq('id', id);
+  if (error) { alert('Erro ao remover: ' + error.message); return; }
+  state.parcelamentos = state.parcelamentos.filter(x => x.id !== id);
+  state.parcelas = state.parcelas.filter(x => x.parcelamento_id !== id);
+  renderAll();
+}
+
+function renderParcelamentos() {
+  const lista = document.getElementById('listaParcelamentos');
+  if (!lista) return;
+  if (!state.parcelamentos.length) { lista.innerHTML = '<p class="empty">Nenhum parcelamento cadastrado ainda.</p>'; return; }
+  lista.innerHTML = state.parcelamentos.map(pl => {
+    const parcelas = state.parcelas.filter(p => p.parcelamento_id === pl.id).sort((a, b) => a.numero - b.numero);
+    const pagas = parcelas.filter(p => p.pago).length;
+    const linhasHtml = parcelas.map(p => `
+      <div class="parcela-linha ${p.pago ? 'paga' : ''}">
+        <input type="checkbox" ${p.pago ? 'checked' : ''} onchange="toggleParcelaPaga('${p.id}')">
+        <span>Parcela ${p.numero}/${pl.quantidade_parcelas} · ${p.data_vencimento.split('-').reverse().join('/')}</span>
+        <span class="val">${fmt(p.valor)}</span>
+        <button class="edit" onclick="editarParcela('${p.id}')" title="Editar">✎</button>
+      </div>
+    `).join('');
+    return `
+      <div class="parcelamento-item">
+        <div class="row-top">
+          <span class="pessoa">${pl.pessoa}</span>
+          <span class="tipo-tag ${pl.tipo}">${pl.tipo === 'receber' ? 'A receber' : 'A pagar'}</span>
+        </div>
+        ${pl.descricao ? `<span class="desc">${pl.descricao}</span>` : ''}
+        <p class="progresso">${pagas}/${pl.quantidade_parcelas} parcelas pagas · total ${fmt(pl.valor_total)}</p>
+        ${linhasHtml}
+        <button class="del" onclick="removerParcelamento('${pl.id}')" style="margin-top:8px;">Excluir parcelamento ×</button>
+      </div>
+    `;
+  }).join('');
+}
+
+// ---------- Calculadora (tela Parcelas) ----------
+function calcClear() { calcExpr = ''; document.getElementById('calcDisplay').value = '0'; }
+function calcBackspace() { calcExpr = calcExpr.slice(0, -1); document.getElementById('calcDisplay').value = calcExpr || '0'; }
+function calcInput(v) { calcExpr += v; document.getElementById('calcDisplay').value = calcExpr; }
+function calcIgual() {
+  try {
+    if (!calcExpr || !/^[0-9+\-*/.() ]+$/.test(calcExpr)) throw new Error('expressão inválida');
+    const resultado = Function('"use strict"; return (' + calcExpr + ')')();
+    if (!isFinite(resultado)) throw new Error('resultado inválido');
+    calcExpr = String(Math.round(resultado * 100) / 100);
+    document.getElementById('calcDisplay').value = calcExpr;
+  } catch (err) {
+    document.getElementById('calcDisplay').value = 'Erro';
+    calcExpr = '';
+  }
+}
+function calcAplicar() {
+  const valor = parseFloat(document.getElementById('calcDisplay').value.replace(',', '.'));
+  if (isNaN(valor)) { alert('Calcule um valor primeiro.'); return; }
+  document.getElementById('pcValorTotal').value = valor;
+  atualizarPreviewParcelas();
+}
+
+// ---------- Relatório em PDF ----------
+function formatarDataBR(iso) { return iso.split('-').reverse().join('/'); }
+
+function obterPeriodoRelatorio() {
+  const hoje = new Date();
+  const iso = d => d.toISOString().slice(0, 10);
+  if (periodoRelatorioAtual === 'dia') return { inicio: iso(hoje), fim: iso(hoje) };
+  if (periodoRelatorioAtual === 'semana') {
+    const ini = new Date(hoje); ini.setDate(ini.getDate() - 6);
+    return { inicio: iso(ini), fim: iso(hoje) };
+  }
+  if (periodoRelatorioAtual === 'mes') {
+    const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    return { inicio: iso(ini), fim: iso(hoje) };
+  }
+  const de = document.getElementById('relDe').value;
+  const ate = document.getElementById('relAte').value;
+  return { inicio: de || iso(hoje), fim: ate || iso(hoje) };
+}
+
+function setPeriodoRelatorio(tipo, btn) {
+  periodoRelatorioAtual = tipo;
+  document.querySelectorAll('#tela-relatorio .period-toggle button').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.getElementById('relatorioPersonalizado').classList.toggle('hidden', tipo !== 'personalizado');
+  const { inicio, fim } = obterPeriodoRelatorio();
+  document.getElementById('relPeriodoResumo').textContent = `De ${formatarDataBR(inicio)} até ${formatarDataBR(fim)}`;
+}
+
+function abrirRelatorio() {
+  irPara('relatorio');
+  setPeriodoRelatorio('mes', document.querySelector('#tela-relatorio .period-toggle button'));
+}
+
+function desenharGraficoBarras(labels, valores) {
+  if (!labels.length) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 700; canvas.height = 260;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const max = Math.max(...valores, 1);
+  const larguraBarra = canvas.width / labels.length;
+  labels.forEach((lbl, i) => {
+    const h = (valores[i] / max) * 190;
+    ctx.fillStyle = '#1F6B41';
+    ctx.fillRect(i * larguraBarra + 8, 220 - h, larguraBarra - 16, h);
+    ctx.fillStyle = '#1B1D1B';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(lbl.slice(5).split('-').reverse().join('/'), i * larguraBarra + larguraBarra / 2, 238);
+  });
+  return canvas.toDataURL('image/png');
+}
+
+function gerarRelatorioPDF() {
+  const statusEl = document.getElementById('relStatus');
+  statusEl.textContent = 'Gerando PDF...';
+  try {
+    if (!window.jspdf) throw new Error('biblioteca de PDF não carregou — verifique sua internet e tente de novo');
+    const { inicio, fim } = obterPeriodoRelatorio();
+    const lancsPeriodo = state.lancamentos.filter(l => l.data >= inicio && l.data <= fim);
+    const despesas = lancsPeriodo.filter(l => l.tipo === 'despesa');
+    const receitas = lancsPeriodo.filter(l => l.tipo === 'receita');
+    const totalSaiu = despesas.reduce((s, l) => s + Number(l.valor), 0);
+    const totalEntrou = receitas.reduce((s, l) => s + Number(l.valor), 0);
+    const maiorGasto = despesas.length ? despesas.reduce((a, b) => Number(b.valor) > Number(a.valor) ? b : a) : null;
+    const menorGasto = despesas.length ? despesas.reduce((a, b) => Number(b.valor) < Number(a.valor) ? b : a) : null;
+
+    const rankingJuros = state.cartoes
+      .map(c => ({ nome: c.nome, maiorJuros: Math.max(c.juros_credito || 0, c.juros_debito || 0, c.juros_pix || 0) }))
+      .filter(c => c.maiorJuros > 0)
+      .sort((a, b) => b.maiorJuros - a.maiorJuros);
+
+    const extratoPorCartao = {};
+    lancsPeriodo.forEach(l => {
+      const chave = l.cartao_id || 'sem-cartao';
+      (extratoPorCartao[chave] = extratoPorCartao[chave] || []).push(l);
+    });
+
+    const porDia = {};
+    despesas.forEach(l => { porDia[l.data] = (porDia[l.data] || 0) + Number(l.valor); });
+    const dias = Object.keys(porDia).sort();
+    const chartImg = desenharGraficoBarras(dias, dias.map(d => porDia[d]));
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    let y = 18;
+    doc.setFontSize(16); doc.text('Meu Financeiro — Relatório', 14, y); y += 8;
+    doc.setFontSize(10); doc.text(`Período: ${formatarDataBR(inicio)} a ${formatarDataBR(fim)}`, 14, y); y += 10;
+
+    doc.setFontSize(12); doc.text('Resumo', 14, y); y += 7;
+    doc.setFontSize(10);
+    doc.text(`Total recebido: ${fmt(totalEntrou)}`, 14, y); y += 6;
+    doc.text(`Total gasto: ${fmt(totalSaiu)}`, 14, y); y += 6;
+    doc.text(`Saldo do período: ${fmt(totalEntrou - totalSaiu)}`, 14, y); y += 6;
+    if (maiorGasto) { doc.text(`Maior gasto: ${maiorGasto.descricao} — ${fmt(maiorGasto.valor)} (${formatarDataBR(maiorGasto.data)})`, 14, y); y += 6; }
+    if (menorGasto) { doc.text(`Menor gasto: ${menorGasto.descricao} — ${fmt(menorGasto.valor)} (${formatarDataBR(menorGasto.data)})`, 14, y); y += 6; }
+    y += 4;
+
+    if (chartImg) {
+      doc.setFontSize(12); doc.text('Gastos por dia', 14, y); y += 4;
+      doc.addImage(chartImg, 'PNG', 14, y, 180, 66);
+      y += 74;
+    }
+
+    if (y > 250) { doc.addPage(); y = 18; }
+    doc.setFontSize(12); doc.text('Juros por cartão (do maior pro menor)', 14, y); y += 7;
+    doc.setFontSize(10);
+    if (rankingJuros.length) rankingJuros.forEach(c => { doc.text(`${c.nome}: ${c.maiorJuros}% ao mês`, 14, y); y += 6; });
+    else { doc.text('Nenhum cartão com juros cadastrado ainda.', 14, y); y += 6; }
+    y += 4;
+
+    if (y > 240) { doc.addPage(); y = 18; }
+    doc.setFontSize(12); doc.text('Extrato por cartão/conta', 14, y); y += 7;
+    doc.setFontSize(10);
+    const entradasExtrato = Object.entries(extratoPorCartao);
+    if (!entradasExtrato.length) { doc.text('Nenhum lançamento no período.', 14, y); y += 6; }
+    entradasExtrato.forEach(([chave, itens]) => {
+      const cartao = state.cartoes.find(c => c.id === chave);
+      const nome = cartao ? cartao.nome : 'Sem cartão vinculado';
+      const total = itens.reduce((s, l) => s + (l.tipo === 'despesa' ? Number(l.valor) : -Number(l.valor)), 0);
+      if (y > 270) { doc.addPage(); y = 18; }
+      doc.setFont(undefined, 'bold'); doc.text(`${nome} — total ${fmt(total)}`, 14, y); doc.setFont(undefined, 'normal'); y += 6;
+      itens.forEach(l => {
+        if (y > 280) { doc.addPage(); y = 18; }
+        doc.text(`  ${formatarDataBR(l.data)} · ${l.descricao} · ${l.tipo === 'receita' ? '+' : '-'}${fmt(l.valor)}`, 14, y); y += 5;
+      });
+      y += 3;
+    });
+
+    doc.save(`relatorio-meu-financeiro-${inicio}-a-${fim}.pdf`);
+    statusEl.textContent = 'PDF gerado! Confira na pasta de downloads do seu navegador.';
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = 'Erro ao gerar PDF: ' + err.message;
+  }
 }
 
 // ---------- Pluggy (Open Finance) — chamado por pluggy-connect-client.js ----------
@@ -396,6 +744,20 @@ function renderDashboard() {
   document.getElementById('detalheDevedorCartoes').innerHTML = state.cartoes.length
     ? state.cartoes.map(c => `<div class="linha"><span>${c.nome}</span><span class="val">${fmt(c.saldo_devedor)}</span></div>`).join('')
     : '<p class="empty">Nenhum cartão cadastrado ainda.</p>';
+
+  const parcelasPendentes = state.parcelas.filter(p => !p.pago);
+  const parcelaComTipo = p => ({ p, pl: state.parcelamentos.find(x => x.id === p.parcelamento_id) });
+  const receberPendentes = parcelasPendentes.map(parcelaComTipo).filter(x => x.pl && x.pl.tipo === 'receber');
+  const pagarPendentes = parcelasPendentes.map(parcelaComTipo).filter(x => x.pl && x.pl.tipo === 'pagar');
+  const totalReceberPessoas = receberPendentes.reduce((s, x) => s + Number(x.p.valor), 0);
+  const totalPagarPessoas = pagarPendentes.reduce((s, x) => s + Number(x.p.valor), 0);
+  document.getElementById('totalReceberPessoas').textContent = fmt(totalReceberPessoas);
+  document.getElementById('totalPagarPessoas').textContent = fmt(totalPagarPessoas);
+  const linhaParcela = x => `<div class="linha"><span>${x.pl.pessoa} (${x.p.numero}/${x.pl.quantidade_parcelas})</span><span class="val">${fmt(x.p.valor)}</span></div>`;
+  document.getElementById('detalheReceberPessoas').innerHTML = receberPendentes.length
+    ? receberPendentes.map(linhaParcela).join('') : '<p class="empty">Nada a receber pendente.</p>';
+  document.getElementById('detalhePagarPessoas').innerHTML = pagarPendentes.length
+    ? pagarPendentes.map(linhaParcela).join('') : '<p class="empty">Nada a pagar pendente.</p>';
 
   const lista = document.getElementById('listaVencimentos');
   const ordenadas = [...state.contas].filter(c => !c.pago).sort((a, b) => diasAteVencimento(a.dia_vencimento) - diasAteVencimento(b.dia_vencimento));
@@ -515,9 +877,20 @@ function renderProjecao() {
 }
 
 function renderAll() {
+  renderSelectCartoes();
   renderDashboard();
   renderLancamentos();
   renderContas();
   renderCartoes();
+  renderParcelamentos();
   renderProjecao();
+}
+
+function renderSelectCartoes() {
+  const sel = document.getElementById('lCartao');
+  if (!sel) return;
+  const atual = sel.value;
+  sel.innerHTML = '<option value="">— nenhum —</option>' +
+    state.cartoes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
+  sel.value = atual;
 }

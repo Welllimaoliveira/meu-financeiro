@@ -48,6 +48,10 @@
     </div>
     <div class="topbar-actions">
       <button class="pill" onclick="editarSaldo()">Ajustar saldo</button>
+      <div class="pill-row">
+        <button class="pill" onclick="atualizarApp()" title="Busca a versão mais recente do app e dos dados">↻ Atualizar</button>
+        <button class="pill" onclick="abrirRelatorio()" title="Gerar relatório em PDF">📄 Relatório</button>
+      </div>
       <button class="pill logout" onclick="logout()">Sair</button>
     </div>
   </div>
@@ -74,9 +78,17 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
       Cartões
     </button>
+    <button class="menu-item" onclick="navMenu('parcelas')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9 9h.01M15 15h.01M15 9 9 15"/></svg>
+      Parcelas (a receber/pagar)
+    </button>
     <button class="menu-item" onclick="navMenu('projecao')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V10M11 19V5M18 19v-6"/></svg>
       Projeção
+    </button>
+    <button class="menu-item" onclick="navMenu('relatorio')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h9l3 3v17H6z"/><path d="M9 12h6M9 16h6M9 8h3"/></svg>
+      Relatório em PDF
     </button>
   </div>
 
@@ -109,6 +121,19 @@
     </div>
     <div class="detalhe-cartoes hidden" id="detalheSaldoCartoes"></div>
     <div class="detalhe-cartoes hidden" id="detalheDevedorCartoes"></div>
+
+    <div class="cardgrid">
+      <div class="metric clickable" onclick="toggleDetalheCartoes('receber')">
+        <p class="m-label">A receber (pessoas) ▾</p>
+        <p class="m-value" id="totalReceberPessoas">—</p>
+      </div>
+      <div class="metric warn clickable" onclick="toggleDetalheCartoes('pagarPessoas')">
+        <p class="m-label">A pagar (pessoas) ▾</p>
+        <p class="m-value" id="totalPagarPessoas">—</p>
+      </div>
+    </div>
+    <div class="detalhe-cartoes hidden" id="detalheReceberPessoas"></div>
+    <div class="detalhe-cartoes hidden" id="detalhePagarPessoas"></div>
 
     <h2 class="section">Próximos vencimentos</h2>
     <div id="listaVencimentos"></div>
@@ -156,6 +181,12 @@
         <label>Data</label>
         <input type="date" id="lData" required>
       </div>
+      <div>
+        <label>Cartão/conta usado (opcional, ajuda no relatório)</label>
+        <select id="lCartao">
+          <option value="">— nenhum —</option>
+        </select>
+      </div>
       <button class="btn-primary" type="submit">Adicionar lançamento</button>
     </form>
 
@@ -165,7 +196,7 @@
 
   <!-- TELA: CONTAS FIXAS -->
   <div class="screen hidden" id="tela-contas">
-    <h2 class="section" style="margin-top:0;">Cadastrar conta fixa</h2>
+    <h2 class="section" style="margin-top:0;" id="contaFormTitulo">Cadastrar conta fixa</h2>
     <form onsubmit="return adicionarConta(event)">
       <div>
         <label>Nome da conta</label>
@@ -193,7 +224,8 @@
         <label>Alertar quantos dias antes do vencimento?</label>
         <input type="number" id="cAlerta" value="3" min="0" max="15">
       </div>
-      <button class="btn-primary" type="submit">Salvar conta</button>
+      <button class="btn-primary" type="submit" id="contaSubmitBtn">Salvar conta</button>
+      <button class="btn-link hidden" type="button" id="contaCancelarBtn" onclick="cancelarEdicaoConta()">Cancelar edição</button>
     </form>
 
     <h2 class="section">Contas fixas cadastradas</h2>
@@ -251,6 +283,71 @@
     <div id="listaCartoes"></div>
   </div>
 
+  <!-- TELA: PARCELAS (a receber/a pagar de pessoas, parcelado) -->
+  <div class="screen hidden" id="tela-parcelas">
+    <h2 class="section" style="margin-top:0;">Calculadora</h2>
+    <div class="calc-box">
+      <input type="text" id="calcDisplay" class="calc-display" value="0" readonly>
+      <div class="calc-grid">
+        <button type="button" class="calc-op" onclick="calcClear()">C</button>
+        <button type="button" class="calc-op" onclick="calcBackspace()">⌫</button>
+        <button type="button" class="calc-op" onclick="calcInput('/')">÷</button>
+        <button type="button" class="calc-op" onclick="calcInput('*')">×</button>
+        <button type="button" onclick="calcInput('7')">7</button>
+        <button type="button" onclick="calcInput('8')">8</button>
+        <button type="button" onclick="calcInput('9')">9</button>
+        <button type="button" class="calc-op" onclick="calcInput('-')">−</button>
+        <button type="button" onclick="calcInput('4')">4</button>
+        <button type="button" onclick="calcInput('5')">5</button>
+        <button type="button" onclick="calcInput('6')">6</button>
+        <button type="button" class="calc-op" onclick="calcInput('+')">+</button>
+        <button type="button" onclick="calcInput('1')">1</button>
+        <button type="button" onclick="calcInput('2')">2</button>
+        <button type="button" onclick="calcInput('3')">3</button>
+        <button type="button" class="calc-igual" onclick="calcIgual()" rowspan="2">=</button>
+        <button type="button" onclick="calcInput('0')" style="grid-column:span 2;">0</button>
+        <button type="button" onclick="calcInput('.')">,</button>
+      </div>
+      <button class="btn-accent" type="button" onclick="calcAplicar()" style="margin-top:10px;">Usar este valor no parcelamento</button>
+    </div>
+
+    <h2 class="section">Novo parcelamento</h2>
+    <form onsubmit="return adicionarParcelamento(event)">
+      <div>
+        <label>Tipo</label>
+        <div class="toggle-row">
+          <button type="button" id="tipoReceberBtn" class="active" onclick="setTipoParcelamento('receber')">A receber</button>
+          <button type="button" id="tipoPagarBtn" onclick="setTipoParcelamento('pagar')">A pagar</button>
+        </div>
+      </div>
+      <div>
+        <label>Nome da pessoa</label>
+        <input type="text" id="pcPessoa" placeholder="Ex: João, Maria" required>
+      </div>
+      <div>
+        <label>Descrição (opcional)</label>
+        <input type="text" id="pcDescricao" placeholder="Ex: Empréstimo, venda do carro">
+      </div>
+      <div>
+        <label>Valor total (R$)</label>
+        <input type="number" step="0.01" id="pcValorTotal" placeholder="Ex: 300" required oninput="atualizarPreviewParcelas()">
+      </div>
+      <div>
+        <label>Quantidade de parcelas</label>
+        <input type="number" id="pcParcelas" min="1" value="1" required oninput="atualizarPreviewParcelas()">
+      </div>
+      <div>
+        <label>Data da 1ª parcela</label>
+        <input type="date" id="pcDataInicio" required>
+      </div>
+      <p class="sub" id="pcPreview" style="margin:0; font-size:12.5px; color:var(--ink-soft);"></p>
+      <button class="btn-primary" type="submit">Salvar parcelamento</button>
+    </form>
+
+    <h2 class="section">Seus parcelamentos</h2>
+    <div id="listaParcelamentos"></div>
+  </div>
+
   <!-- TELA: PROJEÇÃO -->
   <div class="screen hidden" id="tela-projecao">
     <h2 class="section" style="margin-top:0;">Projeção financeira</h2>
@@ -265,6 +362,30 @@
     </div>
     <div class="bars" id="bars"></div>
     <p class="empty" id="projLegenda"></p>
+  </div>
+
+  <!-- TELA: RELATÓRIO EM PDF -->
+  <div class="screen hidden" id="tela-relatorio">
+    <h2 class="section" style="margin-top:0;">Relatório em PDF</h2>
+    <div class="period-toggle">
+      <button class="active" onclick="setPeriodoRelatorio('dia', this)">Dia</button>
+      <button onclick="setPeriodoRelatorio('semana', this)">Semana</button>
+      <button onclick="setPeriodoRelatorio('mes', this)">Mês</button>
+      <button onclick="setPeriodoRelatorio('personalizado', this)">Personalizado</button>
+    </div>
+    <div id="relatorioPersonalizado" class="hidden">
+      <div>
+        <label>De</label>
+        <input type="date" id="relDe">
+      </div>
+      <div>
+        <label>Até</label>
+        <input type="date" id="relAte">
+      </div>
+    </div>
+    <p class="sub" id="relPeriodoResumo" style="font-size:12.5px; color:var(--ink-soft);"></p>
+    <button class="btn-primary" onclick="gerarRelatorioPDF()">Gerar PDF</button>
+    <p class="sub" id="relStatus" style="margin-top:10px; font-size:12.5px;"></p>
   </div>
 
   <nav>
@@ -294,6 +415,7 @@
 <script src="config.js"></script>
 <script src="/api/public-config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="auth.js"></script>
 <script src="app.js"></script>
 <script type="module" src="pluggy-connect-client.js"></script>

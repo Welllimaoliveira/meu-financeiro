@@ -83,6 +83,11 @@ create table if not exists fin_cartoes (
 -- alter table fin_cartoes add column if not exists juros_debito numeric(6,2);
 -- alter table fin_cartoes add column if not exists juros_pix numeric(6,2);
 
+-- fin_lancamentos ganha o vínculo opcional com fin_cartoes aqui (depois que
+-- a tabela fin_cartoes já existe) — qual cartão/conta foi usado, pro
+-- relatório por cartão.
+alter table fin_lancamentos add column if not exists cartao_id uuid references fin_cartoes(id) on delete set null;
+
 -- 6) SALDOS (histórico — manual ou vindo do Pluggy/Open Finance) -----
 create table if not exists fin_saldos (
   id uuid primary key default gen_random_uuid(),
@@ -105,6 +110,32 @@ create table if not exists fin_pluggy_items (
   atualizado_em timestamptz default now()
 );
 
+-- 8) PARCELAMENTOS (dinheiro a receber/pagar de pessoas, parcelado) -----
+create table if not exists fin_parcelamentos (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users on delete cascade,
+  pessoa text not null,
+  descricao text,
+  tipo text check (tipo in ('receber','pagar')) not null,
+  valor_total numeric(12,2) not null,
+  quantidade_parcelas int not null check (quantidade_parcelas >= 1),
+  data_inicio date not null default current_date,
+  created_at timestamptz default now()
+);
+
+-- 9) PARCELAS (cada parcela individual de um parcelamento) -----
+create table if not exists fin_parcelas (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users on delete cascade,
+  parcelamento_id uuid references fin_parcelamentos(id) on delete cascade,
+  numero int not null,
+  valor numeric(12,2) not null,
+  data_vencimento date not null,
+  pago boolean default false,
+  data_pagamento date,
+  created_at timestamptz default now()
+);
+
 -- ============================================================
 -- SEGURANÇA: cada usuário logado só enxerga os próprios dados.
 -- Como vocês usam o MESMO login, os dois enxergam os mesmos dados.
@@ -116,6 +147,8 @@ alter table fin_lancamentos enable row level security;
 alter table fin_cartoes enable row level security;
 alter table fin_saldos enable row level security;
 alter table fin_pluggy_items enable row level security;
+alter table fin_parcelamentos enable row level security;
+alter table fin_parcelas enable row level security;
 
 drop policy if exists "usuario ve seu proprio perfil" on fin_profiles;
 create policy "usuario ve seu proprio perfil" on fin_profiles
@@ -143,6 +176,14 @@ create policy "usuario gerencia seus fin_saldos" on fin_saldos
 
 drop policy if exists "usuario gerencia seus items pluggy" on fin_pluggy_items;
 create policy "usuario gerencia seus items pluggy" on fin_pluggy_items
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "usuario gerencia seus fin_parcelamentos" on fin_parcelamentos;
+create policy "usuario gerencia seus fin_parcelamentos" on fin_parcelamentos
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "usuario gerencia suas fin_parcelas" on fin_parcelas;
+create policy "usuario gerencia suas fin_parcelas" on fin_parcelas
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- ============================================================
