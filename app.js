@@ -95,6 +95,18 @@ function mudarTela(nome, btn) {
   renderAll();
 }
 
+// Menu de cima (telona) — mesmos destinos da barra debaixo, mais fácil de
+// alcançar com o polegar no celular.
+function toggleMenu() {
+  document.getElementById('menuOverlay').classList.toggle('hidden');
+}
+
+function navMenu(nome) {
+  const btn = document.querySelector('nav button[data-tela="' + nome + '"]');
+  if (btn) mudarTela(nome, btn);
+  toggleMenu();
+}
+
 // ---------- Saldo ----------
 async function editarSaldo() {
   const novo = prompt('Novo saldo em conta:', state.saldo);
