@@ -13,7 +13,10 @@ let state = {
   parcelamentos: [],
   parcelas: [],
   categoriasMap: {}, // id -> {nome, tipo}
+  mesSelecionado: '', // 'YYYY-MM' - preenchido em iniciarApp()
+  pagamentosMes: {}, // conta_id -> true, só do mês selecionado
 };
+const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 let tipoLancamentoAtual = 'despesa';
 let donutChart = null;
 const PALETA_CATEGORIAS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#8b5fbf', '#C23B2E', '#6B6F68'];
@@ -44,9 +47,10 @@ async function iniciarApp() {
   currentUser = user;
   if (!currentUser) return;
 
+  state.mesSelecionado = mesAtualRef();
   await garantirPerfil();
   await carregarCategorias();
-  await Promise.all([carregarContas(), carregarLancamentos(), carregarCartoes(), carregarParcelamentos(), carregarParcelas()]);
+  await Promise.all([carregarContas(), carregarLancamentos(), carregarCartoes(), carregarParcelamentos(), carregarParcelas(), carregarPagamentos(state.mesSelecionado)]);
 
   const lDataEl = document.getElementById('lData');
   if (lDataEl && !lDataEl.value) lDataEl.valueAsDate = new Date();
@@ -118,12 +122,53 @@ async function carregarParcelas() {
   state.parcelas = data || [];
 }
 
+// ---------- Pagamento de contas fixas por mês (com histórico) ----------
+// Cada conta fixa é recorrente (mesmo registro todo mês); o que muda mês a
+// mês é só se ELA JÁ FOI PAGA NAQUELE MÊS - isso mora em
+// fin_contas_pagamentos, uma linha por (conta, mês) quando paga. Sem linha
+// = não paga naquele mês. Assim o mês novo já começa "tudo por pagar"
+// sozinho, sem precisar desmarcar nada na mão, e o histórico de meses
+// anteriores fica registrado.
+function mesAtualRef() {
+  const h = new Date();
+  return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}`;
+}
+function labelMes(ref) {
+  const [y, m] = ref.split('-').map(Number);
+  return `${MESES_PT[m - 1]} de ${y}`;
+}
+function contaPagaNoMes(id) {
+  return !!state.pagamentosMes[id];
+}
+async function carregarPagamentos(mesRef) {
+  const { data, error } = await supabaseClient
+    .from('fin_contas_pagamentos').select('conta_id').eq('mes_referencia', mesRef).eq('pago', true);
+  if (error) { console.error(error); return; }
+  state.pagamentosMes = {};
+  (data || []).forEach(r => { state.pagamentosMes[r.conta_id] = true; });
+}
+async function mudarMes(delta) {
+  let [y, m] = state.mesSelecionado.split('-').map(Number);
+  m += delta;
+  if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
+  state.mesSelecionado = `${y}-${String(m).padStart(2, '0')}`;
+  await carregarPagamentos(state.mesSelecionado);
+  renderAll();
+}
+
 // ---------- Navegação ----------
 function mudarTela(nome, btn) {
   document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
   document.getElementById('tela-' + nome).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  // Voltar ao início sempre mostra o mês vigente, mesmo se você tiver
+  // ficado navegando por um mês passado/futuro em "Contas".
+  if (nome === 'dashboard' && state.mesSelecionado !== mesAtualRef()) {
+    state.mesSelecionado = mesAtualRef();
+    carregarPagamentos(state.mesSelecionado).then(renderAll);
+    return;
+  }
   renderAll();
 }
 
@@ -286,9 +331,20 @@ function cancelarEdicaoConta() {
 async function toggleContaPaga(id) {
   const conta = state.contas.find(c => c.id === id);
   if (!conta) return;
-  conta.pago = !conta.pago;
-  const { error } = await supabaseClient.from('fin_contas').update({ pago: conta.pago }).eq('id', id);
-  if (error) { alert('Erro ao atualizar: ' + error.message); conta.pago = !conta.pago; return; }
+  const vaiMarcarPaga = !contaPagaNoMes(id);
+  if (vaiMarcarPaga) {
+    const { error } = await supabaseClient.from('fin_contas_pagamentos').upsert(
+      { user_id: currentUser.id, conta_id: id, mes_referencia: state.mesSelecionado, pago: true, pago_em: new Date().toISOString() },
+      { onConflict: 'conta_id,mes_referencia' }
+    );
+    if (error) { alert('Erro ao atualizar: ' + error.message); return; }
+    state.pagamentosMes[id] = true;
+  } else {
+    const { error } = await supabaseClient.from('fin_contas_pagamentos')
+      .delete().eq('conta_id', id).eq('mes_referencia', state.mesSelecionado);
+    if (error) { alert('Erro ao atualizar: ' + error.message); return; }
+    delete state.pagamentosMes[id];
+  }
   renderAll();
 }
 
@@ -729,18 +785,31 @@ function simular() {
   const totalContas = state.contas.filter(c => !c.pago).reduce((s, c) => s + Number(c.valor), 0);
   const gastosPendentes = state.lancamentos.filter(l => l.tipo === 'despesa').reduce((s, l) => s + Number(l.valor), 0);
   const receitas = state.lancamentos.filter(l => l.tipo === 'receita').reduce((s, l) => s + Number(l.valor), 0);
-  const restante = state.saldo - totalContas - gastosPendentes + receitas - val;
+  const restante = saldoTotalReal() - totalContas - gastosPendentes + receitas - val;
   box.innerHTML = `Se você gastar mais <b>${fmt(val)}</b>, seu saldo no fim do mês fica em <b style="color:${restante < 0 ? 'var(--danger)' : 'var(--green-600)'}">${fmt(restante)}</b>`;
 }
 
 // ---------- Render ----------
+// Saldo "de verdade": o valor ajustado manualmente + as contas correntes/
+// poupança conectadas (Pluggy ou manuais). O saldo_atual de cartão de
+// CRÉDITO não entra aqui - aquele número é limite disponível, não dinheiro
+// seu, então somar ele inflaria o saldo de mentirinha.
+function saldoTotalReal() {
+  const contasReais = state.cartoes
+    .filter(c => c.tipo_conta !== 'cartao_credito')
+    .reduce((s, c) => s + Number(c.saldo_atual || 0), 0);
+  return state.saldo + contasReais;
+}
+
 function renderDashboard() {
-  document.getElementById('saldoDisplay').textContent = fmt(state.saldo);
-  const totalAPagar = state.contas.filter(c => !c.pago).reduce((s, c) => s + Number(c.valor), 0);
-  const totalPago = state.contas.filter(c => c.pago).reduce((s, c) => s + Number(c.valor), 0);
+  const saldoTotal = saldoTotalReal();
+  document.getElementById('saldoDisplay').textContent = fmt(saldoTotal);
+  document.getElementById('mesSelecionadoLabel').textContent = labelMes(state.mesSelecionado);
+  const totalAPagar = state.contas.filter(c => !contaPagaNoMes(c.id)).reduce((s, c) => s + Number(c.valor), 0);
+  const totalPago = state.contas.filter(c => contaPagaNoMes(c.id)).reduce((s, c) => s + Number(c.valor), 0);
   const gastosPendentes = state.lancamentos.filter(l => l.tipo === 'despesa').reduce((s, l) => s + Number(l.valor), 0);
   const receitas = state.lancamentos.filter(l => l.tipo === 'receita').reduce((s, l) => s + Number(l.valor), 0);
-  const projetado = state.saldo - totalAPagar - gastosPendentes + receitas;
+  const projetado = saldoTotal - totalAPagar - gastosPendentes + receitas;
 
   document.getElementById('totalAPagar').textContent = fmt(totalAPagar);
   document.getElementById('totalPago').textContent = fmt(totalPago);
@@ -749,7 +818,7 @@ function renderDashboard() {
 
   // Frase logo abaixo do saldo, no topo: quanto sobra depois das faturas
   // que ainda faltam pagar este mês.
-  const saldoLivre = state.saldo - totalAPagar;
+  const saldoLivre = saldoTotal - totalAPagar;
   const elLivre = document.getElementById('saldoLivre');
   elLivre.textContent = `${fmt(Math.abs(saldoLivre))} ${saldoLivre < 0 ? 'faltando' : 'livres'} depois de pagar as faturas`;
   elLivre.className = 'livre ' + (saldoLivre < 0 ? 'neg' : 'pos');
@@ -796,17 +865,28 @@ function renderDashboard() {
     ? pagarPendentes.map(linhaParcela).join('') : '<p class="empty">Nada a pagar pendente.</p>';
 
   const lista = document.getElementById('listaVencimentos');
-  const ordenadas = [...state.contas].filter(c => !c.pago).sort((a, b) => diasAteVencimento(a.dia_vencimento) - diasAteVencimento(b.dia_vencimento));
-  lista.innerHTML = ordenadas.length ? ordenadas.map(c => {
-    const dias = diasAteVencimento(c.dia_vencimento);
+  const contasPendentes = state.contas.filter(c => !contaPagaNoMes(c.id)).map(c => ({
+    id: c.id, nome: c.nome, valor: Number(c.valor), dia_vencimento: c.dia_vencimento,
+    alerta_dias_antes: c.alerta_dias_antes, subtitulo: state.categoriasMap[c.categoria_id]?.nome, isFatura: false,
+  }));
+  // Fatura de cartão de crédito com saldo devedor > 0 entra na mesma lista,
+  // pra você ver que precisa pagar - sem checkbox de "pago" própria, porque
+  // o valor devedor já reflete a realidade (sincroniza pela Pluggy ou você
+  // ajusta manualmente em "Cartões" quando quitar).
+  const faturasCartoes = state.cartoes.filter(c => Number(c.saldo_devedor) > 0 && c.dia_vencimento).map(c => ({
+    id: 'cartao:' + c.id, nome: 'Fatura ' + c.nome, valor: Number(c.saldo_devedor), dia_vencimento: c.dia_vencimento,
+    alerta_dias_antes: 3, subtitulo: 'Cartão', isFatura: true,
+  }));
+  const ordenadas = [...contasPendentes, ...faturasCartoes].sort((a, b) => diasAteVencimento(a.dia_vencimento) - diasAteVencimento(b.dia_vencimento));
+  lista.innerHTML = ordenadas.length ? ordenadas.map(item => {
+    const dias = diasAteVencimento(item.dia_vencimento);
     const label = dias === 0 ? 'Vence hoje' : dias === 1 ? 'Vence amanhã' : `Vence em ${dias} dias`;
-    const cat = state.categoriasMap[c.categoria_id];
-    const subtitulo = (cat ? cat.nome + ' · ' : '') + `${label} · dia ${c.dia_vencimento}`;
+    const subtitulo = (item.subtitulo ? item.subtitulo + ' · ' : '') + `${label} · dia ${item.dia_vencimento}`;
     return `<div class="bill">
-      <span class="dot" style="background:${corPorId(c.id)}"></span>
-      <div class="info"><p class="name">${c.nome}</p><p class="due ${dias <= c.alerta_dias_antes ? 'soon' : ''}">${subtitulo}</p></div>
-      <p class="amount neg">-${fmt(c.valor)}</p>
-      <input type="checkbox" onchange="toggleContaPaga('${c.id}')">
+      <span class="dot" style="background:${corPorId(item.id)}"></span>
+      <div class="info"><p class="name">${item.nome}</p><p class="due ${dias <= item.alerta_dias_antes ? 'soon' : ''}">${subtitulo}</p></div>
+      <p class="amount neg">-${fmt(item.valor)}</p>
+      ${item.isFatura ? '' : `<input type="checkbox" onchange="toggleContaPaga('${item.id}')">`}
     </div>`;
   }).join('') : '<p class="empty">Nenhuma conta pendente. 🎉</p>';
 
@@ -869,14 +949,16 @@ function renderLancamentos() {
 }
 
 function renderContas() {
+  document.getElementById('mesSelecionadoLabelContas').textContent = labelMes(state.mesSelecionado);
   const lista = document.getElementById('listaContas');
   lista.innerHTML = state.contas.length ? state.contas.map(c => {
     const cat = state.categoriasMap[c.categoria_id];
-    return `<div class="bill ${c.pago ? 'paid' : ''}">
+    const paga = contaPagaNoMes(c.id);
+    return `<div class="bill ${paga ? 'paid' : ''}">
       <span class="dot" style="background:${corPorId(c.id)}"></span>
-      <div class="info"><p class="name">${c.nome}</p><p class="due">${cat ? cat.nome : ''} · dia ${c.dia_vencimento}${c.pago ? ' · paga' : ''}</p></div>
+      <div class="info"><p class="name">${c.nome}</p><p class="due">${cat ? cat.nome : ''} · dia ${c.dia_vencimento}${paga ? ' · paga em ' + labelMes(state.mesSelecionado) : ''}</p></div>
       <p class="amount">${fmt(c.valor)}</p>
-      <input type="checkbox" title="${c.pago ? 'Marcar como não paga' : 'Marcar como paga'}" ${c.pago ? 'checked' : ''} onchange="toggleContaPaga('${c.id}')">
+      <input type="checkbox" title="${paga ? 'Marcar como não paga' : 'Marcar como paga'}" ${paga ? 'checked' : ''} onchange="toggleContaPaga('${c.id}')">
       <button class="edit" onclick="editarConta('${c.id}')" title="Editar">✎</button>
       <button class="del" onclick="removerConta('${c.id}')" title="Excluir">×</button>
     </div>`;
@@ -934,17 +1016,17 @@ function renderProjecao() {
   if (periodoAtual === 'semanal') {
     label.textContent = 'Saldo estimado ao fim da semana';
     const semanal = totalContasMes / 4.33 + gastosPendentes / 4;
-    let saldo = state.saldo;
+    let saldo = saldoTotalReal();
     for (let i = 1; i <= 4; i++) { saldo -= semanal; pontos.push({ lbl: 'S' + i, val: saldo }); }
     legenda.textContent = 'Estimativa dividindo as contas do mês em 4 semanas.';
   } else if (periodoAtual === 'mensal') {
     label.textContent = 'Saldo estimado ao fim do mês';
-    let saldo = state.saldo;
+    let saldo = saldoTotalReal();
     for (let i = 1; i <= 6; i++) { saldo += receitas - totalContasMes - (gastosPendentes / 6); pontos.push({ lbl: 'M' + i, val: saldo }); }
     legenda.textContent = 'Projeção repetindo as contas fixas pelos próximos 6 meses.';
   } else {
     label.textContent = 'Saldo estimado ao fim do ano';
-    let saldo = state.saldo;
+    let saldo = saldoTotalReal();
     for (let i = 1; i <= 4; i++) { saldo += (receitas - totalContasMes) * 3; pontos.push({ lbl: 'T' + i, val: saldo }); }
     legenda.textContent = 'Projeção trimestral repetindo o padrão atual de gastos fixos.';
   }

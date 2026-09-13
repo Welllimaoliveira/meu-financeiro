@@ -143,6 +143,16 @@ body{
 .donut-legend .nome{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink);}
 .donut-legend .pct{font-weight:600; color:var(--ink-soft); flex-shrink:0;}
 
+/* seletor de mês (dashboard e Contas fixas) */
+.mes-seletor{display:flex; align-items:center; justify-content:center; gap:16px; margin:16px 0 2px;}
+.mes-seletor button{
+  width:30px; height:30px; border-radius:50%; border:1px solid var(--border); background:var(--paper);
+  font-size:16px; line-height:1; color:var(--green-700); cursor:pointer;
+}
+.mes-seletor button:active{background:var(--green-wash);}
+.mes-seletor span{font-size:14.5px; font-weight:600; min-width:120px; text-align:center;}
+.mes-seletor-hint{font-size:11.5px; color:var(--ink-soft); margin:2px 0 14px; text-align:center;}
+
 .detalhe-cartoes{
   background:var(--paper); border:1px solid var(--border); border-radius:var(--radius);
   padding:4px 14px; margin:-10px 0 18px;

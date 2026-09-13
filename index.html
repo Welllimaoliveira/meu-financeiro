@@ -157,7 +157,12 @@
     <div class="detalhe-cartoes hidden" id="detalheReceberPessoas"></div>
     <div class="detalhe-cartoes hidden" id="detalhePagarPessoas"></div>
 
-    <h2 class="section">Próximos 30 dias</h2>
+    <div class="mes-seletor">
+      <button type="button" onclick="mudarMes(-1)" aria-label="Mês anterior">‹</button>
+      <span id="mesSelecionadoLabel"></span>
+      <button type="button" onclick="mudarMes(1)" aria-label="Próximo mês">›</button>
+    </div>
+    <h2 class="section" style="margin-top:6px;">Próximos 30 dias</h2>
     <div id="listaVencimentos"></div>
 
     <div class="simbox">
@@ -254,6 +259,12 @@
     </form>
 
     <h2 class="section">Contas fixas cadastradas</h2>
+    <div class="mes-seletor">
+      <button type="button" onclick="mudarMes(-1)" aria-label="Mês anterior">‹</button>
+      <span id="mesSelecionadoLabelContas"></span>
+      <button type="button" onclick="mudarMes(1)" aria-label="Próximo mês">›</button>
+    </div>
+    <p class="mes-seletor-hint">Marcar/desmarcar como paga vale só pro mês acima. Ao voltar pro Início, sempre mostra o mês atual de novo.</p>
     <div id="listaContas"></div>
   </div>
 

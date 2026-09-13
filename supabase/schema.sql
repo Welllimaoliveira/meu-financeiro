@@ -194,3 +194,28 @@ create policy "usuario gerencia suas fin_parcelas" on fin_parcelas
 -- - "fin_saldos"      = histórico de saldo de cada cartão/conta
 -- - "fin_pluggy_items"= cada conexão feita com um banco via Open Finance
 -- ============================================================
+
+-- ============================================================
+-- MIGRAÇÃO — pagamento de contas fixas por mês, com histórico
+-- Antes, "fin_contas.pago" era um interruptor único pra sempre: uma vez
+-- marcada como paga, a conta não voltava a aparecer nos vencimentos do
+-- mês seguinte sozinha. Agora cada mês tem seu próprio registro de
+-- pago/não pago por conta, e o app já sabe zerar sozinho quando o mês vira
+-- (não precisa fazer nada manual todo mês).
+-- Pode colar e rodar mesmo se "fin_contas" já existir - é só uma tabela nova.
+-- ============================================================
+create table if not exists fin_contas_pagamentos (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users on delete cascade,
+  conta_id uuid references fin_contas(id) on delete cascade,
+  mes_referencia text not null, -- formato 'YYYY-MM', ex: '2026-09'
+  pago boolean not null default true,
+  pago_em timestamptz default now(),
+  unique (conta_id, mes_referencia)
+);
+
+alter table fin_contas_pagamentos enable row level security;
+
+drop policy if exists "usuario gerencia seus fin_contas_pagamentos" on fin_contas_pagamentos;
+create policy "usuario gerencia seus fin_contas_pagamentos" on fin_contas_pagamentos
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
