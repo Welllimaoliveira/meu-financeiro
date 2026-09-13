@@ -101,6 +101,11 @@ function toggleMenu() {
   document.getElementById('menuOverlay').classList.toggle('hidden');
 }
 
+function toggleDetalheCartoes(tipo) {
+  const id = tipo === 'saldo' ? 'detalheSaldoCartoes' : 'detalheDevedorCartoes';
+  document.getElementById(id).classList.toggle('hidden');
+}
+
 function navMenu(nome) {
   const btn = document.querySelector('nav button[data-tela="' + nome + '"]');
   if (btn) mudarTela(nome, btn);
@@ -243,7 +248,11 @@ async function adicionarCartao(e) {
     user_id: currentUser.id,
     nome: document.getElementById('caNome').value,
     tipo_conta: document.getElementById('caTipo').value,
-    saldo_atual: parseFloat(document.getElementById('caSaldo').value),
+    saldo_atual: parseFloat(document.getElementById('caSaldo').value) || 0,
+    saldo_devedor: parseFloat(document.getElementById('caDevedor').value) || 0,
+    juros_credito: parseFloat(document.getElementById('caJurosCredito').value) || null,
+    juros_debito: parseFloat(document.getElementById('caJurosDebito').value) || null,
+    juros_pix: parseFloat(document.getElementById('caJurosPix').value) || null,
     origem: 'manual',
     atualizado_em: new Date().toISOString(),
   };
@@ -262,6 +271,38 @@ async function removerCartao(id) {
   renderAll();
 }
 
+async function editarCartao(id) {
+  const c = state.cartoes.find(x => x.id === id);
+  if (!c) return;
+
+  const novoNome = prompt('Nome:', c.nome);
+  if (novoNome === null) return;
+  const novoSaldoStr = prompt('Saldo disponível (R$):', c.saldo_atual ?? 0);
+  if (novoSaldoStr === null) return;
+  const novoDevedorStr = prompt('Valor devedor (R$):', c.saldo_devedor ?? 0);
+  if (novoDevedorStr === null) return;
+  const jurosCreditoStr = prompt('Juros no crédito (% ao mês, deixe vazio se não souber):', c.juros_credito ?? '');
+  if (jurosCreditoStr === null) return;
+  const jurosDebitoStr = prompt('Juros no débito (% ao mês):', c.juros_debito ?? '');
+  if (jurosDebitoStr === null) return;
+  const jurosPixStr = prompt('Juros no Pix (% ao mês):', c.juros_pix ?? '');
+  if (jurosPixStr === null) return;
+
+  const registro = {
+    nome: novoNome,
+    saldo_atual: parseFloat(novoSaldoStr.replace(',', '.')) || 0,
+    saldo_devedor: parseFloat(novoDevedorStr.replace(',', '.')) || 0,
+    juros_credito: jurosCreditoStr.trim() === '' ? null : parseFloat(jurosCreditoStr.replace(',', '.')),
+    juros_debito: jurosDebitoStr.trim() === '' ? null : parseFloat(jurosDebitoStr.replace(',', '.')),
+    juros_pix: jurosPixStr.trim() === '' ? null : parseFloat(jurosPixStr.replace(',', '.')),
+    atualizado_em: new Date().toISOString(),
+  };
+  const { data, error } = await supabaseClient.from('fin_cartoes').update(registro).eq('id', id).select().single();
+  if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  state.cartoes = state.cartoes.map(x => x.id === id ? data : x);
+  renderAll();
+}
+
 // ---------- Pluggy (Open Finance) — chamado por pluggy-connect-client.js ----------
 async function salvarContasPluggy(itemId, instituicao, accounts) {
   await supabaseClient.from('fin_pluggy_items').upsert(
@@ -272,15 +313,21 @@ async function salvarContasPluggy(itemId, instituicao, accounts) {
   const mapaTipo = { CHECKING_ACCOUNT: 'conta_corrente', SAVINGS_ACCOUNT: 'poupanca', CREDIT_CARD: 'cartao_credito' };
 
   for (const acc of accounts) {
+    // Cartão de crédito: "balance" da Pluggy é o valor da fatura em aberto
+    // (o que você deve), não dinheiro disponível — guarda em saldo_devedor,
+    // e saldo_atual vira o limite ainda livre (quando a Pluggy manda esse
+    // dado em creditData). Conta corrente/poupança: balance é mesmo saldo.
+    const ehCredito = acc.type === 'CREDIT';
     const registro = {
       user_id: currentUser.id,
       nome: acc.marketingName || acc.name || instituicao,
       banco: instituicao,
-      tipo_conta: mapaTipo[acc.subtype] || (acc.type === 'CREDIT' ? 'cartao_credito' : 'conta_corrente'),
+      tipo_conta: mapaTipo[acc.subtype] || (ehCredito ? 'cartao_credito' : 'conta_corrente'),
       origem: 'open_finance',
       pluggy_item_id: itemId,
       pluggy_account_id: acc.id,
-      saldo_atual: acc.balance,
+      saldo_atual: ehCredito ? (acc.creditData?.availableCreditLimit ?? 0) : acc.balance,
+      saldo_devedor: ehCredito ? Math.abs(acc.creditData?.balanceCloseInvoice ?? acc.balance ?? 0) : 0,
       atualizado_em: new Date().toISOString(),
     };
 
@@ -339,6 +386,17 @@ function renderDashboard() {
   document.getElementById('saldoProjetado').textContent = fmt(projetado);
   document.getElementById('saldoProjetadoCard').className = 'metric ' + (projetado < 0 ? 'bad' : '');
 
+  const totalSaldoCartoes = state.cartoes.reduce((s, c) => s + Number(c.saldo_atual || 0), 0);
+  const totalDevedorCartoes = state.cartoes.reduce((s, c) => s + Number(c.saldo_devedor || 0), 0);
+  document.getElementById('totalSaldoCartoes').textContent = fmt(totalSaldoCartoes);
+  document.getElementById('totalDevedorCartoes').textContent = fmt(totalDevedorCartoes);
+  document.getElementById('detalheSaldoCartoes').innerHTML = state.cartoes.length
+    ? state.cartoes.map(c => `<div class="linha"><span>${c.nome}</span><span class="val">${fmt(c.saldo_atual)}</span></div>`).join('')
+    : '<p class="empty">Nenhum cartão cadastrado ainda.</p>';
+  document.getElementById('detalheDevedorCartoes').innerHTML = state.cartoes.length
+    ? state.cartoes.map(c => `<div class="linha"><span>${c.nome}</span><span class="val">${fmt(c.saldo_devedor)}</span></div>`).join('')
+    : '<p class="empty">Nenhum cartão cadastrado ainda.</p>';
+
   const lista = document.getElementById('listaVencimentos');
   const ordenadas = [...state.contas].filter(c => !c.pago).sort((a, b) => diasAteVencimento(a.dia_vencimento) - diasAteVencimento(b.dia_vencimento));
   lista.innerHTML = ordenadas.length ? ordenadas.map(c => {
@@ -386,7 +444,13 @@ const LABEL_TIPO_CONTA = { conta_corrente: 'Conta corrente', poupanca: 'Poupanç
 
 function renderCartoes() {
   const lista = document.getElementById('listaCartoes');
-  lista.innerHTML = state.cartoes.length ? state.cartoes.map(c => `
+  lista.innerHTML = state.cartoes.length ? state.cartoes.map(c => {
+    const juros = [
+      c.juros_credito != null ? `crédito ${c.juros_credito}%` : null,
+      c.juros_debito != null ? `débito ${c.juros_debito}%` : null,
+      c.juros_pix != null ? `Pix ${c.juros_pix}%` : null,
+    ].filter(Boolean).join(' · ');
+    return `
     <div class="card-item">
       <div class="row-top">
         <span class="nome">${c.nome}</span>
@@ -395,10 +459,16 @@ function renderCartoes() {
       <span class="banco">${c.banco ? c.banco + ' · ' : ''}${LABEL_TIPO_CONTA[c.tipo_conta] || c.tipo_conta}</span>
       <div class="row-top">
         <span class="saldo">${fmt(c.saldo_atual)}</span>
-        <button class="del" onclick="removerCartao('${c.id}')">×</button>
+        ${Number(c.saldo_devedor) > 0 ? `<span class="devedor">deve ${fmt(c.saldo_devedor)}</span>` : ''}
+      </div>
+      ${juros ? `<span class="juros">Juros: ${juros} a.m.</span>` : ''}
+      <div class="row-top">
+        <button class="edit" onclick="editarCartao('${c.id}')" title="Editar">✎ Editar</button>
+        <button class="del" onclick="removerCartao('${c.id}')" title="Excluir">×</button>
       </div>
     </div>
-  `).join('') : '<p class="empty">Nenhuma conta ou cartão cadastrado ainda.</p>';
+  `;
+  }).join('') : '<p class="empty">Nenhuma conta ou cartão cadastrado ainda.</p>';
 }
 
 function setPeriodo(p, btn) {

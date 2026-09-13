@@ -97,6 +97,19 @@
       <p class="m-value" id="saldoProjetado">—</p>
     </div>
 
+    <div class="cardgrid">
+      <div class="metric clickable" onclick="toggleDetalheCartoes('saldo')">
+        <p class="m-label">Saldo dos cartões ▾</p>
+        <p class="m-value" id="totalSaldoCartoes">—</p>
+      </div>
+      <div class="metric warn clickable" onclick="toggleDetalheCartoes('devedor')">
+        <p class="m-label">Devedor total ▾</p>
+        <p class="m-value" id="totalDevedorCartoes">—</p>
+      </div>
+    </div>
+    <div class="detalhe-cartoes hidden" id="detalheSaldoCartoes"></div>
+    <div class="detalhe-cartoes hidden" id="detalheDevedorCartoes"></div>
+
     <h2 class="section">Próximos vencimentos</h2>
     <div id="listaVencimentos"></div>
 
@@ -216,8 +229,20 @@
         </select>
       </div>
       <div>
-        <label>Saldo / limite disponível (R$)</label>
+        <label>Saldo disponível (R$)</label>
         <input type="number" step="0.01" id="caSaldo" placeholder="Ex: 1200" required>
+      </div>
+      <div>
+        <label>Valor devedor (R$) — fatura em aberto, cheque especial usado...</label>
+        <input type="number" step="0.01" id="caDevedor" placeholder="Ex: 350" value="0">
+      </div>
+      <div>
+        <label>Juros — % ao mês (opcional, veja no app do seu banco)</label>
+        <div class="row-3">
+          <input type="number" step="0.01" id="caJurosCredito" placeholder="Crédito">
+          <input type="number" step="0.01" id="caJurosDebito" placeholder="Débito">
+          <input type="number" step="0.01" id="caJurosPix" placeholder="Pix">
+        </div>
       </div>
       <button class="btn-primary" type="submit">Salvar</button>
     </form>

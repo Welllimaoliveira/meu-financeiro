@@ -68,10 +68,20 @@ create table if not exists fin_cartoes (
   origem text check (origem in ('manual','open_finance')) default 'manual',
   pluggy_item_id text,
   pluggy_account_id text,
-  saldo_atual numeric(12,2),
+  saldo_atual numeric(12,2),        -- dinheiro disponível (conta) ou limite livre (cartão)
+  saldo_devedor numeric(12,2) default 0, -- o que você deve (fatura do cartão, cheque especial usado...)
+  juros_credito numeric(6,2),       -- % ao mês, opcional
+  juros_debito numeric(6,2),        -- % ao mês, opcional
+  juros_pix numeric(6,2),           -- % ao mês, opcional
   atualizado_em timestamptz,
   created_at timestamptz default now()
 );
+
+-- Migração pra quem já tinha a tabela fin_cartoes sem essas colunas:
+-- alter table fin_cartoes add column if not exists saldo_devedor numeric(12,2) default 0;
+-- alter table fin_cartoes add column if not exists juros_credito numeric(6,2);
+-- alter table fin_cartoes add column if not exists juros_debito numeric(6,2);
+-- alter table fin_cartoes add column if not exists juros_pix numeric(6,2);
 
 -- 6) SALDOS (histórico — manual ou vindo do Pluggy/Open Finance) -----
 create table if not exists fin_saldos (
