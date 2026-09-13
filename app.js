@@ -142,6 +142,26 @@ async function removerLancamento(id) {
   renderAll();
 }
 
+async function editarLancamento(id) {
+  const l = state.lancamentos.find(x => x.id === id);
+  if (!l) return;
+
+  const novaDesc = prompt('Descrição:', l.descricao);
+  if (novaDesc === null) return;
+  const novoValorStr = prompt('Valor (R$):', l.valor);
+  if (novoValorStr === null) return;
+  const novoValor = parseFloat(novoValorStr.replace(',', '.'));
+  if (isNaN(novoValor)) { alert('Valor inválido.'); return; }
+  const novaData = prompt('Data (AAAA-MM-DD):', l.data);
+  if (novaData === null) return;
+
+  const registro = { descricao: novaDesc, valor: novoValor, data: novaData };
+  const { data, error } = await supabaseClient.from('fin_lancamentos').update(registro).eq('id', id).select().single();
+  if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  state.lancamentos = state.lancamentos.map(x => x.id === id ? data : x);
+  renderAll();
+}
+
 // ---------- Contas fixas ----------
 async function adicionarConta(e) {
   e.preventDefault();
@@ -179,6 +199,28 @@ async function removerConta(id) {
   const { error } = await supabaseClient.from('fin_contas').update({ ativa: false }).eq('id', id);
   if (error) { alert('Erro ao remover: ' + error.message); return; }
   state.contas = state.contas.filter(c => c.id !== id);
+  renderAll();
+}
+
+async function editarConta(id) {
+  const c = state.contas.find(x => x.id === id);
+  if (!c) return;
+
+  const novoNome = prompt('Nome da conta:', c.nome);
+  if (novoNome === null) return;
+  const novoValorStr = prompt('Valor (R$):', c.valor);
+  if (novoValorStr === null) return;
+  const novoValor = parseFloat(novoValorStr.replace(',', '.'));
+  if (isNaN(novoValor)) { alert('Valor inválido.'); return; }
+  const novoDiaStr = prompt('Dia do vencimento (1-31):', c.dia_vencimento);
+  if (novoDiaStr === null) return;
+  const novoDia = parseInt(novoDiaStr, 10);
+  if (isNaN(novoDia) || novoDia < 1 || novoDia > 31) { alert('Dia inválido.'); return; }
+
+  const registro = { nome: novoNome, valor: novoValor, dia_vencimento: novoDia };
+  const { data, error } = await supabaseClient.from('fin_contas').update(registro).eq('id', id).select().single();
+  if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  state.contas = state.contas.map(x => x.id === id ? data : x);
   renderAll();
 }
 
@@ -308,7 +350,8 @@ function renderLancamentos() {
     return `<div class="txn">
       <div class="info"><p style="font-size:14px; font-weight:500;">${l.descricao}</p><p style="font-size:12px; color:var(--ink-soft);">${cat ? cat.nome : ''} · ${l.data.split('-').reverse().join('/')}</p></div>
       <p class="val ${l.tipo === 'receita' ? 'pos' : 'neg'}">${l.tipo === 'receita' ? '+' : '-'} ${fmt(l.valor)}</p>
-      <button class="del" onclick="removerLancamento('${l.id}')">×</button>
+      <button class="edit" onclick="editarLancamento('${l.id}')" title="Editar">✎</button>
+      <button class="del" onclick="removerLancamento('${l.id}')" title="Excluir">×</button>
     </div>`;
   }).join('') : '<p class="empty">Nenhum lançamento ainda.</p>';
 }
@@ -321,7 +364,8 @@ function renderContas() {
       <span class="dot" style="background:${corPorId(c.id)}"></span>
       <div class="info"><p class="name">${c.nome}</p><p class="due">${cat ? cat.nome : ''} · dia ${c.dia_vencimento}</p></div>
       <p class="amount">${fmt(c.valor)}</p>
-      <button class="del" onclick="removerConta('${c.id}')">×</button>
+      <button class="edit" onclick="editarConta('${c.id}')" title="Editar">✎</button>
+      <button class="del" onclick="removerConta('${c.id}')" title="Excluir">×</button>
     </div>`;
   }).join('') : '<p class="empty">Nenhuma conta cadastrada.</p>';
 }

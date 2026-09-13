@@ -142,7 +142,8 @@ input, select{
 .txn .val{font-size:14px; font-weight:600; margin-left:auto;}
 .txn .val.pos{color:var(--green-600);}
 .txn .val.neg{color:var(--danger);}
-.txn .del{background:none; border:none; color:var(--ink-soft); font-size:16px; cursor:pointer; padding:0 4px;}
+.txn .del, .bill .del, .txn .edit, .bill .edit{background:none; border:none; font-size:16px; cursor:pointer; padding:0 4px; color:var(--ink-soft); flex-shrink:0;}
+.txn .edit, .bill .edit{font-size:14px; color:var(--green-700);}
 
 .period-toggle{display:flex; gap:8px; margin-bottom:16px;}
 .period-toggle button{flex:1; padding:9px; border-radius:20px; border:1px solid var(--border); background:var(--paper); font-family:inherit; font-size:13px; cursor:pointer;}
