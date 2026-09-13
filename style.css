@@ -76,8 +76,6 @@ body{
   padding:6px 10px; border-radius:20px; cursor:pointer; font-family:'Inter',sans-serif; white-space:nowrap;
 }
 .topbar button.pill.logout{background:rgba(226,96,10,0.35);}
-.pill-row{display:flex; gap:6px;}
-.pill-row .pill{padding:6px 8px; font-size:11px;}
 
 .menu-toggle{
   background:rgba(255,255,255,0.14); border:none; color:#fff; width:36px; height:36px; border-radius:10px;
