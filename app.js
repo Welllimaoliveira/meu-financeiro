@@ -874,8 +874,9 @@ function renderContas() {
     const cat = state.categoriasMap[c.categoria_id];
     return `<div class="bill ${c.pago ? 'paid' : ''}">
       <span class="dot" style="background:${corPorId(c.id)}"></span>
-      <div class="info"><p class="name">${c.nome}</p><p class="due">${cat ? cat.nome : ''} · dia ${c.dia_vencimento}</p></div>
+      <div class="info"><p class="name">${c.nome}</p><p class="due">${cat ? cat.nome : ''} · dia ${c.dia_vencimento}${c.pago ? ' · paga' : ''}</p></div>
       <p class="amount">${fmt(c.valor)}</p>
+      <input type="checkbox" title="${c.pago ? 'Marcar como não paga' : 'Marcar como paga'}" ${c.pago ? 'checked' : ''} onchange="toggleContaPaga('${c.id}')">
       <button class="edit" onclick="editarConta('${c.id}')" title="Editar">✎</button>
       <button class="del" onclick="removerConta('${c.id}')" title="Excluir">×</button>
     </div>`;
