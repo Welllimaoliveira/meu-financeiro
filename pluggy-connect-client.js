@@ -12,6 +12,7 @@ import { PluggyConnect } from 'https://cdn.jsdelivr.net/npm/pluggy-connect-sdk@2
 window.iniciarConexaoPluggy = async function iniciarConexaoPluggy() {
   const statusEl = document.getElementById('pluggyStatus');
   const btn = document.getElementById('btnConectarBanco');
+  statusEl.style.color = '';
   statusEl.textContent = 'Abrindo conexão segura com a Pluggy...';
   btn.disabled = true;
 
@@ -29,12 +30,22 @@ window.iniciarConexaoPluggy = async function iniciarConexaoPluggy() {
       connectToken: accessToken,
       includeSandbox: true, // deixa aparecer o "Pluggy Bank" de teste enquanto vocês não têm chave de produção
       onSuccess: async (itemData) => {
-        statusEl.textContent = 'Conectado! Buscando saldo...';
-        await sincronizarPluggy(itemData.item.id, itemData.item.connector?.name || 'Banco conectado');
+        try {
+          statusEl.textContent = 'Conectado! Buscando saldo...';
+          const itemId = itemData?.item?.id;
+          if (!itemId) throw new Error('a Pluggy não devolveu o id da conexão (item.id ausente)');
+          await sincronizarPluggy(itemId, itemData.item.connector?.name || 'Banco conectado');
+        } catch (err) {
+          console.error('Erro no onSuccess do Pluggy Connect', err);
+          statusEl.textContent = 'Conectou, mas deu erro ao processar: ' + err.message;
+          btn.disabled = false;
+        }
       },
       onError: (error) => {
         console.error('Pluggy onError', error);
-        statusEl.textContent = 'Não deu pra conectar: ' + (error?.message || 'erro desconhecido');
+        const motivo = error?.message || error?.data?.message || 'erro desconhecido';
+        statusEl.textContent = 'Não deu pra conectar (' + motivo + '). Tente de novo — conexões com bancos reais às vezes falham na primeira tentativa.';
+        statusEl.style.color = 'var(--danger)';
         btn.disabled = false;
       },
       onClose: () => { btn.disabled = false; },
