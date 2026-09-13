@@ -2,8 +2,12 @@
 // Abre o widget da Pluggy (Open Finance) e, no sucesso, manda
 // buscar o saldo real e salvar no Supabase via app.js.
 // Módulo ES — importado direto do CDN, sem precisar de build.
+// Usa o endpoint "+esm" do jsDelivr: o pacote original importa seus
+// próprios arquivos internos sem extensão ".js" (from './pluggy-connect'),
+// o que funciona em bundlers mas quebra silenciosamente em ESM nativo do
+// navegador — o "+esm" reempacota tudo num módulo válido.
 // ============================================================
-import { PluggyConnect } from 'https://cdn.jsdelivr.net/npm/pluggy-connect-sdk@2.14.2/dist/module/index.js';
+import { PluggyConnect } from 'https://cdn.jsdelivr.net/npm/pluggy-connect-sdk@2.14.2/+esm';
 
 window.iniciarConexaoPluggy = async function iniciarConexaoPluggy() {
   const statusEl = document.getElementById('pluggyStatus');
