@@ -23,6 +23,7 @@ function setAuthTab(mode) {
   document.getElementById('authTabLogin').classList.toggle('active', mode === 'login');
   document.getElementById('authTabSignup').classList.toggle('active', mode === 'signup');
   document.getElementById('authSubmitBtn').textContent = mode === 'login' ? 'Entrar' : 'Criar conta';
+  document.getElementById('authSubmitBtn').classList.toggle('accent', mode === 'signup');
   hideAuthError();
 }
 
