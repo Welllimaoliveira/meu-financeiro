@@ -116,6 +116,32 @@ body{
 .metric .m-value{font-size:19px; font-weight:600; margin:0;}
 .metric.clickable{cursor:pointer; user-select:none;}
 .metric.clickable:active{transform:scale(0.98);}
+.metric .m-value.pos{color:var(--green-600);}
+.metric .m-value.neg{color:var(--danger);}
+.metric.flow{background:var(--paper); border:1px solid var(--border);}
+
+/* frase de efeito logo abaixo do saldo, no topo */
+.topbar .livre{font-size:12.5px; margin:5px 0 0; font-weight:600;}
+.topbar .livre.pos{color:#B9E6C9;}
+.topbar .livre.neg{color:#F6C4BA;}
+
+/* gráfico de rosca "Gastos por categoria" */
+.donut-card{
+  display:flex; align-items:center; gap:16px; background:var(--paper); border:1px solid var(--border);
+  border-radius:var(--radius); padding:14px; margin-bottom:18px;
+}
+.donut-wrap{position:relative; width:104px; height:104px; flex-shrink:0;}
+.donut-wrap canvas.hidden{display:none;}
+.donut-empty{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center;
+  font-size:11.5px; color:var(--ink-soft); padding:8px;
+}
+.donut-empty.hidden{display:none;}
+.donut-legend{flex:1; min-width:0; display:flex; flex-direction:column; gap:7px;}
+.donut-legend .item{display:flex; align-items:center; gap:8px; font-size:12.5px;}
+.donut-legend .dot{width:9px; height:9px; border-radius:50%; flex-shrink:0;}
+.donut-legend .nome{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink);}
+.donut-legend .pct{font-weight:600; color:var(--ink-soft); flex-shrink:0;}
 
 .detalhe-cartoes{
   background:var(--paper); border:1px solid var(--border); border-radius:var(--radius);
@@ -175,6 +201,7 @@ h2.section{font-size:14px; font-weight:600; margin:22px 0 10px; color:var(--ink-
 .bill .due{font-size:12px; color:var(--ink-soft); margin-top:2px;}
 .bill .due.soon{color:var(--orange-600); font-weight:600;}
 .bill .amount{font-size:14.5px; font-weight:600; white-space:nowrap;}
+.bill .amount.neg{color:var(--danger);}
 .bill input[type="checkbox"]{width:19px; height:19px; accent-color:var(--green-700);}
 .bill.paid .name, .bill.paid .amount{color:var(--ink-soft); text-decoration:line-through; font-weight:500;}
 

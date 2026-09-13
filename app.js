@@ -15,6 +15,19 @@ let state = {
   categoriasMap: {}, // id -> {nome, tipo}
 };
 let tipoLancamentoAtual = 'despesa';
+let donutChart = null;
+const PALETA_CATEGORIAS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#8b5fbf', '#C23B2E', '#6B6F68'];
+
+// Primeiro e último dia do mês corrente, no mesmo formato 'YYYY-MM-DD'
+// usado em fin_lancamentos.data - pra filtrar "este mês" sem depender de
+// biblioteca de datas.
+function limitesMesAtual() {
+  const hoje = new Date();
+  const y = hoje.getFullYear(), m = hoje.getMonth();
+  const pad = (n) => String(n).padStart(2, '0');
+  const ultimoDia = new Date(y, m + 1, 0).getDate();
+  return { inicio: `${y}-${pad(m + 1)}-01`, fim: `${y}-${pad(m + 1)}-${pad(ultimoDia)}` };
+}
 let periodoAtual = 'semanal';
 let tipoParcelamentoAtual = 'receber';
 let periodoRelatorioAtual = 'mes';
@@ -734,6 +747,29 @@ function renderDashboard() {
   document.getElementById('saldoProjetado').textContent = fmt(projetado);
   document.getElementById('saldoProjetadoCard').className = 'metric ' + (projetado < 0 ? 'bad' : '');
 
+  // Frase logo abaixo do saldo, no topo: quanto sobra depois das faturas
+  // que ainda faltam pagar este mês.
+  const saldoLivre = state.saldo - totalAPagar;
+  const elLivre = document.getElementById('saldoLivre');
+  elLivre.textContent = `${fmt(Math.abs(saldoLivre))} ${saldoLivre < 0 ? 'faltando' : 'livres'} depois de pagar as faturas`;
+  elLivre.className = 'livre ' + (saldoLivre < 0 ? 'neg' : 'pos');
+
+  // Fluxo do mês e gastos por categoria: só os lançamentos deste
+  // calendário-mês (contas fixas/faturas ficam de fora, são outro card).
+  const { inicio: inicioMes, fim: fimMes } = limitesMesAtual();
+  const lancsMes = state.lancamentos.filter(l => l.data >= inicioMes && l.data <= fimMes);
+  const entradasMes = lancsMes.filter(l => l.tipo === 'receita').reduce((s, l) => s + Number(l.valor), 0);
+  const saidasMes = lancsMes.filter(l => l.tipo === 'despesa').reduce((s, l) => s + Number(l.valor), 0);
+  document.getElementById('fluxoEntradas').textContent = fmt(entradasMes);
+  document.getElementById('fluxoSaidas').textContent = fmt(saidasMes);
+
+  const porCategoria = {};
+  lancsMes.filter(l => l.tipo === 'despesa').forEach(l => {
+    const nome = state.categoriasMap[l.categoria_id]?.nome || 'Outros';
+    porCategoria[nome] = (porCategoria[nome] || 0) + Number(l.valor);
+  });
+  renderDonutCategorias(porCategoria);
+
   const totalSaldoCartoes = state.cartoes.reduce((s, c) => s + Number(c.saldo_atual || 0), 0);
   const totalDevedorCartoes = state.cartoes.reduce((s, c) => s + Number(c.saldo_devedor || 0), 0);
   document.getElementById('totalSaldoCartoes').textContent = fmt(totalSaldoCartoes);
@@ -764,15 +800,59 @@ function renderDashboard() {
   lista.innerHTML = ordenadas.length ? ordenadas.map(c => {
     const dias = diasAteVencimento(c.dia_vencimento);
     const label = dias === 0 ? 'Vence hoje' : dias === 1 ? 'Vence amanhã' : `Vence em ${dias} dias`;
+    const cat = state.categoriasMap[c.categoria_id];
+    const subtitulo = (cat ? cat.nome + ' · ' : '') + `${label} · dia ${c.dia_vencimento}`;
     return `<div class="bill">
       <span class="dot" style="background:${corPorId(c.id)}"></span>
-      <div class="info"><p class="name">${c.nome}</p><p class="due ${dias <= c.alerta_dias_antes ? 'soon' : ''}">${label} · dia ${c.dia_vencimento}</p></div>
-      <p class="amount">${fmt(c.valor)}</p>
+      <div class="info"><p class="name">${c.nome}</p><p class="due ${dias <= c.alerta_dias_antes ? 'soon' : ''}">${subtitulo}</p></div>
+      <p class="amount neg">-${fmt(c.valor)}</p>
       <input type="checkbox" onchange="toggleContaPaga('${c.id}')">
     </div>`;
   }).join('') : '<p class="empty">Nenhuma conta pendente. 🎉</p>';
 
   simular();
+}
+
+// Gráfico de rosca "Gastos por categoria" (mês corrente) + legenda ao
+// lado. porCategoria = { "Alimentação": 123.45, ... }, já somado.
+function renderDonutCategorias(porCategoria) {
+  const canvas = document.getElementById('donutCategorias');
+  const legend = document.getElementById('donutLegend');
+  const empty = document.getElementById('donutEmpty');
+  const entradas = Object.entries(porCategoria).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  const total = entradas.reduce((s, [, v]) => s + v, 0);
+
+  if (!entradas.length || typeof Chart === 'undefined') {
+    if (donutChart) { donutChart.destroy(); donutChart = null; }
+    canvas.classList.add('hidden');
+    empty.classList.remove('hidden');
+    legend.innerHTML = '';
+    return;
+  }
+  canvas.classList.remove('hidden');
+  empty.classList.add('hidden');
+
+  const labels = entradas.map(([nome]) => nome);
+  const data = entradas.map(([, v]) => v);
+  const cores = labels.map((_, i) => PALETA_CATEGORIAS[i % PALETA_CATEGORIAS.length]);
+
+  if (donutChart) {
+    donutChart.data.labels = labels;
+    donutChart.data.datasets[0].data = data;
+    donutChart.data.datasets[0].backgroundColor = cores;
+    donutChart.update();
+  } else {
+    donutChart = new Chart(canvas, {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data, backgroundColor: cores, borderWidth: 2, borderColor: '#ffffff' }] },
+      options: { responsive: true, maintainAspectRatio: false, cutout: '68%', plugins: { legend: { display: false } } },
+    });
+  }
+
+  legend.innerHTML = entradas.map(([nome, valor], i) => {
+    const pct = total > 0 ? Math.round((valor / total) * 100) : 0;
+    return `<div class="item"><span class="dot" style="background:${cores[i]}"></span><span class="nome">${nome}</span><span class="pct">${pct}%</span></div>`;
+  }).join('');
 }
 
 function renderLancamentos() {
