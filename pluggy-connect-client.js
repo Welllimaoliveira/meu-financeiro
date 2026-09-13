@@ -9,6 +9,9 @@
 // ============================================================
 import { PluggyConnect } from 'https://cdn.jsdelivr.net/npm/pluggy-connect-sdk@2.14.2/+esm';
 
+const PLUGGY_RESUME_KEY = 'pluggy_oauth_pending';
+const PLUGGY_RESUME_MAX_IDADE_MS = 15 * 60 * 1000; // 15 min
+
 window.iniciarConexaoPluggy = async function iniciarConexaoPluggy() {
   const statusEl = document.getElementById('pluggyStatus');
   const btn = document.getElementById('btnConectarBanco');
@@ -18,19 +21,28 @@ window.iniciarConexaoPluggy = async function iniciarConexaoPluggy() {
 
   try {
     const { data: { user } } = await supabaseClient.auth.getUser();
+    // URL "limpa" (sem query/hash) pra onde a Pluggy deve trazer o usuário de
+    // volta depois do login no site do banco — necessário pra bancos que usam
+    // OAuth (Itaú, Nubank, Santander, Mercado Pago...). Sem isso a conexão
+    // trava numa página em branco no celular (no desktop o popup só se fecha
+    // sozinho, por isso o problema só aparecia no celular).
+    const oauthRedirectUri = window.location.origin + window.location.pathname;
     const resp = await fetch('/api/pluggy-connect-token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientUserId: user?.id || 'meu-financeiro' }),
+      body: JSON.stringify({ clientUserId: user?.id || 'meu-financeiro', oauthRedirectUri }),
     });
     if (!resp.ok) throw new Error(await resp.text());
     const { accessToken } = await resp.json();
+
+    sessionStorage.setItem(PLUGGY_RESUME_KEY, String(Date.now()));
 
     const pluggyConnect = new PluggyConnect({
       connectToken: accessToken,
       includeSandbox: true, // deixa aparecer o "Pluggy Bank" de teste enquanto vocês não têm chave de produção
       onSuccess: async (itemData) => {
         try {
+          sessionStorage.removeItem(PLUGGY_RESUME_KEY);
           statusEl.textContent = 'Conectado! Buscando saldo...';
           const itemId = itemData?.item?.id;
           if (!itemId) throw new Error('a Pluggy não devolveu o id da conexão (item.id ausente)');
@@ -42,6 +54,7 @@ window.iniciarConexaoPluggy = async function iniciarConexaoPluggy() {
         }
       },
       onError: (error) => {
+        sessionStorage.removeItem(PLUGGY_RESUME_KEY);
         console.error('Pluggy onError', error);
         const motivo = error?.message || error?.data?.message || 'erro desconhecido';
         statusEl.textContent = 'Não deu pra conectar (' + motivo + '). Tente de novo — conexões com bancos reais às vezes falham na primeira tentativa.';
@@ -77,3 +90,35 @@ async function sincronizarPluggy(itemId, instituicao) {
     document.getElementById('btnConectarBanco').disabled = false;
   }
 }
+
+// ---------- Retomar sozinho ao voltar do site do banco (OAuth) ----------
+// Bancos como Itaú/Nubank/Santander/Mercado Pago redirecionam o navegador
+// pro site deles pra fazer login. No celular isso navega a aba inteira pra
+// fora do nosso app e, ao voltar, a página recarrega do zero — perdendo
+// qualquer estado de JavaScript. Por isso guardamos um sinalizador antes de
+// sair (sessionStorage) e, se ele existir quando a página carrega de novo,
+// reabrimos o widget automaticamente: a própria Pluggy detecta pela URL que
+// é uma volta de OAuth e resolve a conexão sem pedir os dados de novo.
+async function tentarRetomarConexaoPluggy() {
+  const marcado = sessionStorage.getItem(PLUGGY_RESUME_KEY);
+  if (!marcado) return;
+  if (Date.now() - Number(marcado) > PLUGGY_RESUME_MAX_IDADE_MS) {
+    sessionStorage.removeItem(PLUGGY_RESUME_KEY);
+    return;
+  }
+
+  // Espera o login (Supabase) e a tela do app carregarem antes de continuar.
+  for (let tentativas = 0; tentativas < 40; tentativas++) {
+    const appEl = document.getElementById('app');
+    if (appEl && !appEl.classList.contains('hidden') && window.iniciarConexaoPluggy) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (document.getElementById('app')?.classList.contains('hidden')) return; // não logado, desiste
+
+  document.querySelector('nav button[data-tela="cartoes"]')?.click();
+  const statusEl = document.getElementById('pluggyStatus');
+  if (statusEl) statusEl.textContent = 'Voltando da conexão com o banco, finalizando...';
+  window.iniciarConexaoPluggy();
+}
+
+tentarRetomarConexaoPluggy();

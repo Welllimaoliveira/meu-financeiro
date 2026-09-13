@@ -12,6 +12,11 @@ module.exports = async function handler(req, res) {
     const payload = { options: {} };
     if (body.clientUserId) payload.options.clientUserId = String(body.clientUserId);
     if (body.itemId) payload.itemId = body.itemId; // presente = modo "atualizar conexão existente"
+    // Muitos bancos (Itaú, Nubank, Santander, Mercado Pago...) usam OAuth do
+    // Open Finance: o navegador é levado pro site do banco pra fazer login e
+    // depois precisa saber pra onde voltar. Sem isso a conexão trava numa
+    // página em branco no celular (no desktop o popup só se fecha sozinho).
+    if (body.oauthRedirectUri) payload.options.oauthRedirectUri = String(body.oauthRedirectUri);
 
     const tokenResp = await fetch('https://api.pluggy.ai/connect_token', {
       method: 'POST',
