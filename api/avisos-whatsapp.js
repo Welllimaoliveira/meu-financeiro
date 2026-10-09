@@ -8,6 +8,8 @@
 //                     função do banco só responde com ele (fin_dados_avisos).
 //   WHATSAPP_PHONE    seu número com país e DDD, ex.: +5581999999999
 //   CALLMEBOT_APIKEY  a chave que o bot do CallMeBot te devolve ao ativar
+//   WHATSAPP_PHONE_2 + CALLMEBOT_APIKEY_2   (opcional) outra pessoa, ex.: a esposa
+//   WHATSAPP_PHONE_3 + CALLMEBOT_APIKEY_3   (opcional) mais uma
 //   SUPABASE_URL / SUPABASE_ANON_KEY   já existem (usadas pelo config do app)
 //
 // Parâmetros (só funcionam com o segredo certo):
@@ -99,15 +101,40 @@ async function buscarDados(hoje, segredo) {
   return resp.json();
 }
 
-async function enviarWhatsApp(texto) {
+// Quem recebe: o CallMeBot só manda pro número que ativou o bot e tem a
+// própria chave, então cada pessoa é um par número+chave. O primeiro par usa
+// WHATSAPP_PHONE / CALLMEBOT_APIKEY; os outros usam o mesmo nome com _2 e _3.
+function destinatarios() {
+  return ['', '_2', '_3']
+    .map((s) => ({ phone: process.env['WHATSAPP_PHONE' + s], apikey: process.env['CALLMEBOT_APIKEY' + s] }))
+    .filter((d) => d.phone && d.apikey);
+}
+
+const mascarar = (phone) => '…' + String(phone).replace(/\D/g, '').slice(-4);
+
+async function enviarParaUm(destino, texto) {
   const url = 'https://api.callmebot.com/whatsapp.php'
-    + `?phone=${encodeURIComponent(process.env.WHATSAPP_PHONE)}`
+    + `?phone=${encodeURIComponent(destino.phone)}`
     + `&text=${encodeURIComponent(texto)}`
-    + `&apikey=${encodeURIComponent(process.env.CALLMEBOT_APIKEY)}`;
+    + `&apikey=${encodeURIComponent(destino.apikey)}`;
   const resp = await fetch(url);
   const corpo = (await resp.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
   if (!resp.ok) throw new Error(`CallMeBot respondeu ${resp.status}: ${corpo}`);
   return corpo;
+}
+
+// Manda pra todo mundo, um de cada vez; se um falhar, os outros ainda recebem.
+async function enviarWhatsApp(texto) {
+  const resultados = [];
+  for (const d of destinatarios()) {
+    try {
+      resultados.push({ para: mascarar(d.phone), ok: true, resposta: await enviarParaUm(d, texto) });
+    } catch (err) {
+      console.error('falha ao enviar pra', mascarar(d.phone), err.message);
+      resultados.push({ para: mascarar(d.phone), ok: false, erro: err.message });
+    }
+  }
+  return resultados;
 }
 
 module.exports = async function handler(req, res) {
@@ -115,14 +142,17 @@ module.exports = async function handler(req, res) {
   if (!segredo) return res.status(500).json({ erro: 'CRON_SECRET não configurado na Vercel' });
   if (req.headers.authorization !== `Bearer ${segredo}`) return res.status(401).json({ erro: 'não autorizado' });
 
-  const faltando = ['WHATSAPP_PHONE', 'CALLMEBOT_APIKEY', 'SUPABASE_URL', 'SUPABASE_ANON_KEY'].filter((k) => !process.env[k]);
+  const faltando = ['SUPABASE_URL', 'SUPABASE_ANON_KEY'].filter((k) => !process.env[k]);
   if (faltando.length) return res.status(500).json({ erro: 'faltam variáveis de ambiente: ' + faltando.join(', ') });
+  if (!destinatarios().length) {
+    return res.status(500).json({ erro: 'configure WHATSAPP_PHONE e CALLMEBOT_APIKEY (os dois) na Vercel' });
+  }
 
   try {
     const hoje = hojeISO();
     if (req.query && req.query.teste === '1') {
-      const resposta = await enviarWhatsApp(`*Meu Financeiro* — teste ✅\nSe você leu isso, os avisos no WhatsApp estão funcionando.\n${APP_URL}`);
-      return res.status(200).json({ enviado: true, teste: true, resposta });
+      const envios = await enviarWhatsApp(`*Meu Financeiro* — teste ✅\nSe você leu isso, os avisos no WhatsApp estão funcionando.\n${APP_URL}`);
+      return res.status(envios.some((e) => e.ok) ? 200 : 502).json({ teste: true, envios });
     }
 
     const dados = await buscarDados(hoje, segredo);
@@ -130,8 +160,8 @@ module.exports = async function handler(req, res) {
     if (req.query && req.query.dry === '1') return res.status(200).json({ hoje, enviado: false, texto });
     if (!texto) return res.status(200).json({ hoje, enviado: false, motivo: 'nada vencendo ou atrasado hoje' });
 
-    const resposta = await enviarWhatsApp(texto);
-    return res.status(200).json({ hoje, enviado: true, resposta });
+    const envios = await enviarWhatsApp(texto);
+    return res.status(envios.some((e) => e.ok) ? 200 : 502).json({ hoje, envios });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ erro: err.message });
