@@ -12,6 +12,7 @@ let state = {
   cartoes: [],
   parcelamentos: [],
   parcelas: [],
+  comprovantes: [],
   categoriasMap: {}, // id -> {nome, tipo}
   mesSelecionado: '', // 'YYYY-MM' - preenchido em iniciarApp()
   pagamentosMes: {}, // conta_id -> true, só do mês selecionado
@@ -50,7 +51,7 @@ async function iniciarApp() {
   state.mesSelecionado = mesAtualRef();
   await garantirPerfil();
   await carregarCategorias();
-  await Promise.all([carregarContas(), carregarLancamentos(), carregarCartoes(), carregarParcelamentos(), carregarParcelas(), carregarPagamentos(state.mesSelecionado)]);
+  await Promise.all([carregarContas(), carregarLancamentos(), carregarCartoes(), carregarParcelamentos(), carregarParcelas(), carregarPagamentos(state.mesSelecionado), carregarComprovantes()]);
 
   const lDataEl = document.getElementById('lData');
   if (lDataEl && !lDataEl.value) lDataEl.valueAsDate = new Date();
@@ -229,6 +230,34 @@ async function editarSaldo() {
   }
 }
 
+// Soma/subtrai um valor do saldo em conta (ex.: -150 ao pagar uma conta).
+// Usa uma função do banco (fin_ajustar_saldo) que faz "saldo = saldo + delta"
+// de forma atômica: se você e sua esposa mexerem ao mesmo tempo, ou se um dos
+// aparelhos estiver com o saldo desatualizado, nenhum dos dois sobrescreve o
+// outro. Se a função ainda não existir no banco, cai pro jeito antigo (lê o
+// saldo local, soma e grava).
+async function ajustarSaldoDelta(delta) {
+  delta = Math.round(Number(delta) * 100) / 100;
+  if (!delta) return;
+  const { data, error } = await supabaseClient.rpc('fin_ajustar_saldo', { delta });
+  if (!error && data !== null && data !== undefined && !isNaN(Number(data))) {
+    state.saldo = Number(data);
+    return;
+  }
+  if (error) console.warn('fin_ajustar_saldo indisponível, usando atualização simples:', error.message);
+  state.saldo = Math.round((state.saldo + delta) * 100) / 100;
+  await supabaseClient.from('fin_profiles').update({ saldo_atual: state.saldo }).eq('id', currentUser.id);
+}
+
+// Quanto um lançamento mexe no saldo em conta. Gasto tira, receita põe.
+// Lançamento ligado a um cartão/conta específico não mexe no saldo geral:
+// o dinheiro dele vive no saldo daquele cartão (e no crédito nem saiu da
+// conta ainda — vira fatura).
+function efeitoLancamentoNoSaldo(l) {
+  if (!l || l.cartao_id) return 0;
+  return (l.tipo === 'receita' ? 1 : -1) * Number(l.valor || 0);
+}
+
 // ---------- Lançamentos ----------
 function setTipoLancamento(tipo) {
   tipoLancamentoAtual = tipo;
@@ -253,6 +282,7 @@ async function adicionarLancamento(e) {
   const { data, error } = await supabaseClient.from('fin_lancamentos').insert(registro).select().single();
   if (error) { alert('Erro ao salvar: ' + error.message); return false; }
   state.lancamentos.unshift(data);
+  await ajustarSaldoDelta(efeitoLancamentoNoSaldo(data));
   e.target.reset();
   setTipoLancamento('despesa');
   document.getElementById('lData').valueAsDate = new Date();
@@ -261,9 +291,13 @@ async function adicionarLancamento(e) {
 }
 
 async function removerLancamento(id) {
+  const antigo = state.lancamentos.find(l => l.id === id);
   const { error } = await supabaseClient.from('fin_lancamentos').delete().eq('id', id);
   if (error) { alert('Erro ao remover: ' + error.message); return; }
   state.lancamentos = state.lancamentos.filter(l => l.id !== id);
+  // Apagar o lançamento desfaz o efeito dele no saldo.
+  await ajustarSaldoDelta(-efeitoLancamentoNoSaldo(antigo));
+  await limparComprovantesDe('lancamento', [id]);
   renderAll();
 }
 
@@ -284,6 +318,8 @@ async function editarLancamento(id) {
   const { data, error } = await supabaseClient.from('fin_lancamentos').update(registro).eq('id', id).select().single();
   if (error) { alert('Erro ao salvar: ' + error.message); return; }
   state.lancamentos = state.lancamentos.map(x => x.id === id ? data : x);
+  // Se o valor mudou, o saldo acompanha só a diferença.
+  await ajustarSaldoDelta(efeitoLancamentoNoSaldo(data) - efeitoLancamentoNoSaldo(l));
   renderAll();
 }
 
@@ -345,6 +381,8 @@ async function toggleContaPaga(id) {
     if (error) { alert('Erro ao atualizar: ' + error.message); return; }
     delete state.pagamentosMes[id];
   }
+  // Pagou? o dinheiro saiu da conta. Desmarcou (foi engano)? volta pro saldo.
+  await ajustarSaldoDelta((vaiMarcarPaga ? -1 : 1) * Number(conta.valor));
   renderAll();
 }
 
@@ -502,7 +540,15 @@ async function toggleParcelaPaga(id) {
   const registro = { pago: p.pago, data_pagamento: p.pago ? new Date().toISOString().slice(0, 10) : null };
   const { error } = await supabaseClient.from('fin_parcelas').update(registro).eq('id', id);
   if (error) { alert('Erro ao atualizar: ' + error.message); p.pago = !p.pago; return; }
+  // Recebeu: entra no saldo. Pagou: sai do saldo. Desmarcar desfaz.
+  await ajustarSaldoDelta((p.pago ? 1 : -1) * sinalParcela(p) * Number(p.valor));
   renderAll();
+}
+
+// +1 se a parcela é dinheiro a receber, -1 se é a pagar.
+function sinalParcela(p) {
+  const pl = state.parcelamentos.find(x => x.id === p.parcelamento_id);
+  return pl && pl.tipo === 'receber' ? 1 : -1;
 }
 
 async function editarParcela(id) {
@@ -517,6 +563,8 @@ async function editarParcela(id) {
   const { data, error } = await supabaseClient.from('fin_parcelas').update({ valor: novoValor, data_vencimento: novaData }).eq('id', id).select().single();
   if (error) { alert('Erro ao salvar: ' + error.message); return; }
   state.parcelas = state.parcelas.map(x => x.id === id ? data : x);
+  // Parcela que já foi paga/recebida e mudou de valor: ajusta só a diferença.
+  if (p.pago) await ajustarSaldoDelta(sinalParcela(p) * (novoValor - Number(p.valor)));
   renderAll();
 }
 
@@ -524,8 +572,10 @@ async function removerParcelamento(id) {
   if (!confirm('Excluir esse parcelamento e todas as parcelas dele?')) return;
   const { error } = await supabaseClient.from('fin_parcelamentos').delete().eq('id', id);
   if (error) { alert('Erro ao remover: ' + error.message); return; }
+  const idsParcelas = state.parcelas.filter(x => x.parcelamento_id === id).map(x => x.id);
   state.parcelamentos = state.parcelamentos.filter(x => x.id !== id);
   state.parcelas = state.parcelas.filter(x => x.parcelamento_id !== id);
+  await limparComprovantesDe('parcela', idsParcelas);
   renderAll();
 }
 
@@ -541,6 +591,7 @@ function renderParcelamentos() {
         <input type="checkbox" ${p.pago ? 'checked' : ''} onchange="toggleParcelaPaga('${p.id}')">
         <span>Parcela ${p.numero}/${pl.quantidade_parcelas} · ${p.data_vencimento.split('-').reverse().join('/')}</span>
         <span class="val">${fmt(p.valor)}</span>
+        ${botaoComprovante('parcela', p.id, null)}
         <button class="edit" onclick="editarParcela('${p.id}')" title="Editar">✎</button>
       </div>
     `).join('');
@@ -771,6 +822,177 @@ async function salvarContasPluggy(itemId, instituicao, accounts) {
 }
 window.salvarContasPluggy = salvarContasPluggy;
 
+// ---------- Comprovantes (foto/PDF de conta paga, lançamento ou parcela) ----------
+// Os arquivos ficam num bucket PRIVADO do Supabase Storage, numa pasta com o
+// id do usuário; o app abre cada um por um link temporário (1h). A tabela
+// fin_comprovantes diz a qual conta/lançamento/parcela cada arquivo pertence.
+const BUCKET_COMPROVANTES = 'fin-comprovantes';
+const MAX_BYTES_COMPROVANTE = 10 * 1024 * 1024;
+let compCtx = null; // { tipo: 'conta'|'lancamento'|'parcela', id, mes }
+
+const escHtml = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+
+async function carregarComprovantes() {
+  const { data, error } = await supabaseClient
+    .from('fin_comprovantes').select('*').order('created_at', { ascending: false });
+  if (error) { console.warn('comprovantes indisponíveis:', error.message); state.comprovantes = []; return; }
+  state.comprovantes = data || [];
+}
+
+function comprovantesDe(tipo, id, mes) {
+  return state.comprovantes.filter(c =>
+    c.ref_tipo === tipo && c.ref_id === id && (tipo !== 'conta' || c.mes_referencia === mes));
+}
+
+function botaoComprovante(tipo, id, mes) {
+  const n = comprovantesDe(tipo, id, mes).length;
+  const mesArg = mes ? `'${mes}'` : 'null';
+  return `<button class="clip ${n ? 'tem' : ''}" onclick="abrirComprovantes('${tipo}','${id}',${mesArg})" title="Comprovantes">📎${n ? ' ' + n : ''}</button>`;
+}
+
+function descricaoDoComprovante(c) {
+  if (c.ref_tipo === 'conta') {
+    const x = state.contas.find(k => k.id === c.ref_id);
+    return x ? `Conta: ${x.nome} · ${labelMes(c.mes_referencia)}` : 'Conta (removida)';
+  }
+  if (c.ref_tipo === 'lancamento') {
+    const x = state.lancamentos.find(k => k.id === c.ref_id);
+    return x ? `Lançamento: ${x.descricao}` : 'Lançamento';
+  }
+  const p = state.parcelas.find(k => k.id === c.ref_id);
+  const pl = p && state.parcelamentos.find(k => k.id === p.parcelamento_id);
+  return pl ? `Parcela ${p.numero}/${pl.quantidade_parcelas} · ${pl.pessoa}` : 'Parcela';
+}
+
+async function urlsAssinadas(paths) {
+  const mapa = {};
+  if (!paths.length) return mapa;
+  const { data, error } = await supabaseClient.storage.from(BUCKET_COMPROVANTES).createSignedUrls(paths, 3600);
+  if (error) { console.warn('não deu pra gerar os links:', error.message); return mapa; }
+  (data || []).forEach(d => { if (d.path && d.signedUrl) mapa[d.path] = d.signedUrl; });
+  return mapa;
+}
+
+function itemComprovanteHtml(c, url, mostrarOrigem) {
+  const ehImagem = (c.tipo_mime || '').startsWith('image/');
+  const miniatura = url && ehImagem ? `<img src="${url}" alt="">` : '📄';
+  const nome = escHtml(c.nome_arquivo || 'comprovante');
+  const data = new Date(c.created_at).toLocaleDateString('pt-BR');
+  const origem = mostrarOrigem ? escHtml(descricaoDoComprovante(c)) + ' · ' : '';
+  return `<div class="comp-item">
+    ${url ? `<a class="thumb" href="${url}" target="_blank" rel="noopener">${miniatura}</a>` : `<span class="thumb">${miniatura}</span>`}
+    <div class="info">
+      ${url ? `<a href="${url}" target="_blank" rel="noopener">${nome}</a>` : `${nome} (indisponível)`}
+      <div class="meta">${origem}enviado em ${data}</div>
+    </div>
+    <button class="del" onclick="removerComprovante('${c.id}')" title="Excluir">×</button>
+  </div>`;
+}
+
+function abrirComprovantes(tipo, id, mes) {
+  compCtx = { tipo, id, mes };
+  document.getElementById('compSubtitulo').textContent =
+    descricaoDoComprovante({ ref_tipo: tipo, ref_id: id, mes_referencia: mes });
+  document.getElementById('compStatus').textContent = '';
+  document.getElementById('modalComprovantes').classList.remove('hidden');
+  renderComprovantesModal();
+}
+
+function fecharComprovantes() {
+  compCtx = null;
+  document.getElementById('modalComprovantes').classList.add('hidden');
+  renderAll();
+}
+
+async function renderComprovantesModal() {
+  if (!compCtx) return;
+  const lista = document.getElementById('compLista');
+  const itens = comprovantesDe(compCtx.tipo, compCtx.id, compCtx.mes);
+  if (!itens.length) { lista.innerHTML = '<p class="empty">Nenhum comprovante anexado ainda.</p>'; return; }
+  const urls = await urlsAssinadas(itens.map(i => i.arquivo_path));
+  lista.innerHTML = itens.map(c => itemComprovanteHtml(c, urls[c.arquivo_path], false)).join('');
+}
+
+async function renderTodosComprovantes() {
+  const el = document.getElementById('listaTodosComprovantes');
+  if (!el) return;
+  if (!state.comprovantes.length) { el.innerHTML = '<p class="empty">Nenhum comprovante ainda.</p>'; return; }
+  const urls = await urlsAssinadas(state.comprovantes.map(c => c.arquivo_path));
+  el.innerHTML = state.comprovantes.map(c => itemComprovanteHtml(c, urls[c.arquivo_path], true)).join('');
+}
+
+// Foto de celular costuma ter 3-8 MB; reduz pra no máx. 1600px de lado em
+// JPEG (fica ~200-400 KB e continua legível pra um comprovante). PDF e
+// qualquer outra coisa sobe do jeito que veio.
+async function prepararArquivoComprovante(file) {
+  if (!file.type || !file.type.startsWith('image/') || file.type === 'image/gif') return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const escala = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bmp.width * escala);
+    canvas.height = Math.round(bmp.height * escala);
+    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.82));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], (file.name || 'foto').replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+  } catch (err) {
+    return file;
+  }
+}
+
+async function anexarComprovante(input) {
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file || !compCtx) return;
+  const ctx = { ...compCtx };
+  const status = document.getElementById('compStatus');
+  try {
+    status.style.color = '';
+    status.textContent = 'Enviando...';
+    const pronto = await prepararArquivoComprovante(file);
+    if (pronto.size > MAX_BYTES_COMPROVANTE) throw new Error('o arquivo passa de 10 MB');
+    const seguro = (pronto.name || 'comprovante').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w.\-]+/g, '_');
+    const path = `${currentUser.id}/${ctx.tipo}/${ctx.id}/${Date.now()}-${seguro}`;
+    const { error: erroUpload } = await supabaseClient.storage
+      .from(BUCKET_COMPROVANTES).upload(path, pronto, { contentType: pronto.type || 'application/octet-stream', upsert: false });
+    if (erroUpload) throw erroUpload;
+    const { data, error } = await supabaseClient.from('fin_comprovantes').insert({
+      user_id: currentUser.id, ref_tipo: ctx.tipo, ref_id: ctx.id,
+      mes_referencia: ctx.tipo === 'conta' ? ctx.mes : null,
+      arquivo_path: path, nome_arquivo: file.name, tipo_mime: pronto.type || null,
+    }).select().single();
+    if (error) { await supabaseClient.storage.from(BUCKET_COMPROVANTES).remove([path]); throw error; }
+    state.comprovantes.unshift(data);
+    status.textContent = 'Comprovante salvo ✔';
+    await renderComprovantesModal();
+  } catch (err) {
+    console.error(err);
+    status.style.color = 'var(--danger)';
+    status.textContent = 'Não deu pra salvar: ' + (err.message || err);
+  }
+}
+
+async function removerComprovante(id) {
+  const c = state.comprovantes.find(x => x.id === id);
+  if (!c || !confirm('Excluir este comprovante?')) return;
+  const { error } = await supabaseClient.from('fin_comprovantes').delete().eq('id', id);
+  if (error) { alert('Erro ao excluir: ' + error.message); return; }
+  await supabaseClient.storage.from(BUCKET_COMPROVANTES).remove([c.arquivo_path]);
+  state.comprovantes = state.comprovantes.filter(x => x.id !== id);
+  await renderComprovantesModal();
+  renderAll();
+}
+
+// Quando um lançamento/parcelamento é apagado, leva os comprovantes junto.
+async function limparComprovantesDe(tipo, ids) {
+  const alvo = state.comprovantes.filter(c => c.ref_tipo === tipo && ids.includes(c.ref_id));
+  if (!alvo.length) return;
+  await supabaseClient.storage.from(BUCKET_COMPROVANTES).remove(alvo.map(c => c.arquivo_path));
+  await supabaseClient.from('fin_comprovantes').delete().in('id', alvo.map(c => c.id));
+  state.comprovantes = state.comprovantes.filter(c => !alvo.includes(c));
+}
+
 // ---------- Simulador ----------
 function diasAteVencimento(dia) {
   let diff = dia - hojeDia;
@@ -782,10 +1004,8 @@ function simular() {
   const val = parseFloat(document.getElementById('simInput').value);
   const box = document.getElementById('simResult');
   if (isNaN(val)) { box.innerHTML = 'Digite um valor para simular.'; return; }
-  const totalContas = state.contas.filter(c => !c.pago).reduce((s, c) => s + Number(c.valor), 0);
-  const gastosPendentes = state.lancamentos.filter(l => l.tipo === 'despesa').reduce((s, l) => s + Number(l.valor), 0);
-  const receitas = state.lancamentos.filter(l => l.tipo === 'receita').reduce((s, l) => s + Number(l.valor), 0);
-  const restante = saldoTotalReal() - totalContas - gastosPendentes + receitas - val;
+  const totalContas = state.contas.filter(c => !contaPagaNoMes(c.id)).reduce((s, c) => s + Number(c.valor), 0);
+  const restante = saldoTotalReal() - totalContas - val;
   box.innerHTML = `Se você gastar mais <b>${fmt(val)}</b>, seu saldo no fim do mês fica em <b style="color:${restante < 0 ? 'var(--danger)' : 'var(--green-600)'}">${fmt(restante)}</b>`;
 }
 
@@ -807,9 +1027,10 @@ function renderDashboard() {
   document.getElementById('mesSelecionadoLabel').textContent = labelMes(state.mesSelecionado);
   const totalAPagar = state.contas.filter(c => !contaPagaNoMes(c.id)).reduce((s, c) => s + Number(c.valor), 0);
   const totalPago = state.contas.filter(c => contaPagaNoMes(c.id)).reduce((s, c) => s + Number(c.valor), 0);
-  const gastosPendentes = state.lancamentos.filter(l => l.tipo === 'despesa').reduce((s, l) => s + Number(l.valor), 0);
-  const receitas = state.lancamentos.filter(l => l.tipo === 'receita').reduce((s, l) => s + Number(l.valor), 0);
-  const projetado = saldoTotal - totalAPagar - gastosPendentes + receitas;
+  // Lançamentos e contas pagas já mexem direto no saldo (ver
+  // ajustarSaldoDelta), então o projetado é só: o que tenho - o que ainda
+  // falta pagar neste mês.
+  const projetado = saldoTotal - totalAPagar;
 
   document.getElementById('totalAPagar').textContent = fmt(totalAPagar);
   document.getElementById('totalPago').textContent = fmt(totalPago);
@@ -942,6 +1163,7 @@ function renderLancamentos() {
     return `<div class="txn">
       <div class="info"><p style="font-size:14px; font-weight:500;">${l.descricao}</p><p style="font-size:12px; color:var(--ink-soft);">${cat ? cat.nome : ''} · ${l.data.split('-').reverse().join('/')}</p></div>
       <p class="val ${l.tipo === 'receita' ? 'pos' : 'neg'}">${l.tipo === 'receita' ? '+' : '-'} ${fmt(l.valor)}</p>
+      ${botaoComprovante('lancamento', l.id, null)}
       <button class="edit" onclick="editarLancamento('${l.id}')" title="Editar">✎</button>
       <button class="del" onclick="removerLancamento('${l.id}')" title="Excluir">×</button>
     </div>`;
@@ -959,6 +1181,7 @@ function renderContas() {
       <div class="info"><p class="name">${c.nome}</p><p class="due">${cat ? cat.nome : ''} · dia ${c.dia_vencimento}${paga ? ' · paga em ' + labelMes(state.mesSelecionado) : ''}</p></div>
       <p class="amount">${fmt(c.valor)}</p>
       <input type="checkbox" title="${paga ? 'Marcar como não paga' : 'Marcar como paga'}" ${paga ? 'checked' : ''} onchange="toggleContaPaga('${c.id}')">
+      ${botaoComprovante('conta', c.id, state.mesSelecionado)}
       <button class="edit" onclick="editarConta('${c.id}')" title="Editar">✎</button>
       <button class="del" onclick="removerConta('${c.id}')" title="Excluir">×</button>
     </div>`;
@@ -1047,6 +1270,10 @@ function renderAll() {
   renderCartoes();
   renderParcelamentos();
   renderProjecao();
+  // Os links dos arquivos são gerados na hora (têm validade), então só monta
+  // essa lista quando a tela de Comprovantes está aberta.
+  const telaComp = document.getElementById('tela-comprovantes');
+  if (telaComp && !telaComp.classList.contains('hidden')) renderTodosComprovantes();
 }
 
 function renderSelectCartoes() {

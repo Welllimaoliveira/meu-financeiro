@@ -219,3 +219,58 @@ alter table fin_contas_pagamentos enable row level security;
 drop policy if exists "usuario gerencia seus fin_contas_pagamentos" on fin_contas_pagamentos;
 create policy "usuario gerencia seus fin_contas_pagamentos" on fin_contas_pagamentos
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ============================================================
+-- MIGRAÇÃO — saldo que acompanha pagamentos + comprovantes
+-- 1) fin_ajustar_saldo(delta): soma/subtrai do saldo de forma atômica
+--    (pagar conta, receber parcela, lançar gasto...). Atômica = dois
+--    aparelhos mexendo ao mesmo tempo não sobrescrevem um ao outro.
+-- 2) fin_comprovantes + bucket PRIVADO "fin-comprovantes" no Storage: foto
+--    ou PDF anexado a uma conta paga, lançamento ou parcela. Cada arquivo
+--    fica numa pasta com o id do usuário e só ele (o login do casal) enxerga.
+-- Pode rodar mais de uma vez sem problema.
+-- ============================================================
+create or replace function fin_ajustar_saldo(delta numeric)
+returns numeric
+language sql
+security invoker
+as $$
+  update fin_profiles
+     set saldo_atual = coalesce(saldo_atual, 0) + delta
+   where id = auth.uid()
+  returning saldo_atual;
+$$;
+
+create table if not exists fin_comprovantes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users on delete cascade,
+  ref_tipo text not null check (ref_tipo in ('conta','lancamento','parcela')),
+  ref_id uuid not null,
+  mes_referencia text,            -- só pra comprovante de conta fixa: 'YYYY-MM'
+  arquivo_path text not null,     -- caminho no bucket: <user_id>/<tipo>/<ref_id>/<arquivo>
+  nome_arquivo text,
+  tipo_mime text,
+  created_at timestamptz default now()
+);
+create index if not exists fin_comprovantes_ref_idx on fin_comprovantes (ref_tipo, ref_id);
+
+alter table fin_comprovantes enable row level security;
+drop policy if exists "usuario gerencia seus fin_comprovantes" on fin_comprovantes;
+create policy "usuario gerencia seus fin_comprovantes" on fin_comprovantes
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('fin-comprovantes', 'fin-comprovantes', false, 10485760)
+on conflict (id) do nothing;
+
+drop policy if exists "fin_comprovantes_ver" on storage.objects;
+create policy "fin_comprovantes_ver" on storage.objects for select to authenticated
+  using (bucket_id = 'fin-comprovantes' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "fin_comprovantes_enviar" on storage.objects;
+create policy "fin_comprovantes_enviar" on storage.objects for insert to authenticated
+  with check (bucket_id = 'fin-comprovantes' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "fin_comprovantes_apagar" on storage.objects;
+create policy "fin_comprovantes_apagar" on storage.objects for delete to authenticated
+  using (bucket_id = 'fin-comprovantes' and (storage.foldername(name))[1] = auth.uid()::text);

@@ -305,3 +305,21 @@ nav button.active{color:var(--green-700);}
 nav svg{width:20px; height:20px;}
 
 .loading-msg{font-size:13px; color:var(--ink-soft); text-align:center; padding:20px;}
+
+/* ---------- Comprovantes ---------- */
+.clip{background:none; border:none; cursor:pointer; font-size:13px; padding:0 4px; color:var(--ink-soft); flex-shrink:0; white-space:nowrap;}
+.clip.tem{color:var(--green-700); font-weight:600;}
+.parcela-linha .edit{background:none; border:none; cursor:pointer; padding:0 4px; color:var(--green-700); font-size:14px; flex-shrink:0;}
+.comp-corpo{padding:16px 22px 28px;}
+.comp-add{display:block; text-align:center; cursor:pointer; margin:0; padding:13px;}
+.comp-item{display:flex; align-items:center; gap:12px; padding:10px 0; border-top:1px solid var(--border);}
+.comp-item .thumb{
+  width:56px; height:56px; border-radius:10px; background:var(--bg); flex-shrink:0; overflow:hidden;
+  display:flex; align-items:center; justify-content:center; font-size:22px; border:1px solid var(--border);
+}
+.comp-item .thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+.comp-item .info{flex:1; min-width:0; font-size:13px;}
+.comp-item .info a{color:var(--green-700); font-weight:600; text-decoration:none; word-break:break-all;}
+.comp-item .info .meta{color:var(--ink-soft); font-size:11.5px; margin-top:2px;}
+.comp-item .del{background:none; border:none; color:var(--ink-soft); font-size:18px; cursor:pointer; padding:0 4px;}
+.btn-link.hidden{display:none;}
