@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/avisos-whatsapp", "schedule": "0 11 * * *" }
+  ]
+}

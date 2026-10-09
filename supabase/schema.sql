@@ -274,3 +274,62 @@ create policy "fin_comprovantes_enviar" on storage.objects for insert to authent
 drop policy if exists "fin_comprovantes_apagar" on storage.objects;
 create policy "fin_comprovantes_apagar" on storage.objects for delete to authenticated
   using (bucket_id = 'fin-comprovantes' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ============================================================
+-- MIGRAÇÃO — avisos no WhatsApp (agendador diário da Vercel)
+-- A função /api/avisos-whatsapp precisa saber o que vence, mas sem ter a
+-- "chave-mestra" do projeto (que enxerga os dados dos outros apps que
+-- dividem este Supabase). Então ela chama fin_dados_avisos(), que só
+-- devolve a lista de vencimentos do app financeiro e só responde se vier o
+-- segredo certo (guardado aqui apenas como hash SHA-256).
+-- A linha em fin_avisos_config (com o hash do segredo) é criada à parte, na
+-- hora de configurar — o segredo em si fica só na Vercel (CRON_SECRET).
+-- ============================================================
+create table if not exists fin_avisos_config (
+  user_id uuid primary key references auth.users on delete cascade,
+  token_hash text not null,
+  criado_em timestamptz default now()
+);
+alter table fin_avisos_config enable row level security;
+-- Sem nenhuma policy de propósito: ninguém (nem logado) lê ou grava direto.
+
+create or replace function fin_dados_avisos(p_token text, p_mes text)
+returns json
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare v_user uuid;
+begin
+  select user_id into v_user from fin_avisos_config
+   where token_hash = encode(digest(convert_to(coalesce(p_token, ''), 'utf8'), 'sha256'), 'hex');
+  if v_user is null then
+    raise exception 'token invalido' using errcode = '28000';
+  end if;
+
+  return json_build_object(
+    'contas', coalesce((
+      select json_agg(json_build_object('id', c.id, 'nome', c.nome, 'valor', c.valor,
+                                        'dia_vencimento', c.dia_vencimento, 'alerta_dias_antes', c.alerta_dias_antes))
+        from fin_contas c where c.user_id = v_user and coalesce(c.ativa, true)), '[]'::json),
+    'pagas', coalesce((
+      select json_agg(p.conta_id)
+        from fin_contas_pagamentos p
+       where p.user_id = v_user and p.mes_referencia = p_mes and p.pago), '[]'::json),
+    'parcelas', coalesce((
+      select json_agg(json_build_object('pessoa', pl.pessoa, 'tipo', pl.tipo, 'numero', pa.numero,
+                                        'total', pl.quantidade_parcelas, 'valor', pa.valor,
+                                        'data_vencimento', pa.data_vencimento))
+        from fin_parcelas pa join fin_parcelamentos pl on pl.id = pa.parcelamento_id
+       where pa.user_id = v_user and not coalesce(pa.pago, false)), '[]'::json),
+    'cartoes', coalesce((
+      select json_agg(json_build_object('nome', k.nome, 'saldo_devedor', k.saldo_devedor,
+                                        'dia_vencimento', k.dia_vencimento))
+        from fin_cartoes k
+       where k.user_id = v_user and coalesce(k.saldo_devedor, 0) > 0 and k.dia_vencimento is not null), '[]'::json)
+  );
+end;
+$$;
+
+revoke all on function fin_dados_avisos(text, text) from public;
+grant execute on function fin_dados_avisos(text, text) to anon, authenticated;
