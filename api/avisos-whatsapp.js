@@ -53,7 +53,7 @@ function montarAviso(dados, hoje) {
   (dados.contas || []).filter((c) => !pagas.has(c.id)).forEach((c) => {
     const diff = Math.round((vencimentoNoMes(ano, mes, c.dia_vencimento) - hojeMs) / DIA_MS);
     const janela = c.alerta_dias_antes ?? DIAS_AVISO_PADRAO;
-    const linha = { diff, texto: `• ${c.nome} — ${brl(c.valor)} (${quando(diff)})` };
+    const linha = { diff, texto: `• ${String(c.nome).trim()} — ${brl(c.valor)} (${quando(diff)})` };
     if (diff < 0) atrasadas.push(linha);
     else if (diff <= janela) proximas.push(linha);
   });
@@ -64,7 +64,7 @@ function montarAviso(dados, hoje) {
     if (venc < hojeMs) venc = vencimentoNoMes(mes === 12 ? ano + 1 : ano, mes === 12 ? 1 : mes + 1, k.dia_vencimento);
     const diff = Math.round((venc - hojeMs) / DIA_MS);
     if (diff <= DIAS_AVISO_PADRAO) {
-      proximas.push({ diff, texto: `• Fatura ${k.nome} — ${brl(k.saldo_devedor)} (${quando(diff)})` });
+      proximas.push({ diff, texto: `• Fatura ${String(k.nome).trim()} — ${brl(k.saldo_devedor)} (${quando(diff)})` });
     }
   });
 
@@ -73,7 +73,7 @@ function montarAviso(dados, hoje) {
     const [a, m, d] = String(p.data_vencimento).split('-').map(Number);
     const diff = Math.round((utc(a, m, d) - hojeMs) / DIA_MS);
     if (diff > DIAS_AVISO_PADRAO) return;
-    const linha = { diff, texto: `• ${p.pessoa} — parcela ${p.numero}/${p.total} — ${brl(p.valor)} (${quando(diff)})` };
+    const linha = { diff, texto: `• ${String(p.pessoa).trim()} — parcela ${p.numero}/${p.total} — ${brl(p.valor)} (${quando(diff)})` };
     (p.tipo === 'receber' ? aReceber : aPagarParcelas).push(linha);
   });
 
