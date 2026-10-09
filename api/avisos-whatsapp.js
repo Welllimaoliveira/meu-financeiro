@@ -106,8 +106,13 @@ async function buscarDados(hoje, segredo) {
 // WHATSAPP_PHONE / CALLMEBOT_APIKEY; os outros usam o mesmo nome com _2 e _3.
 function destinatarios() {
   return ['', '_2', '_3']
-    .map((s) => ({ phone: process.env['WHATSAPP_PHONE' + s], apikey: process.env['CALLMEBOT_APIKEY' + s] }))
-    .filter((d) => d.phone && d.apikey);
+    .map((s) => ({
+      // Aceita "5541984330694", "+55 41 98433-0694" etc.: só os dígitos, com "+" na frente.
+      phone: (process.env['WHATSAPP_PHONE' + s] || '').replace(/\D/g, '').replace(/^(?=.)/, '+'),
+      // Tira espaços/quebras de linha que costumam vir junto ao colar a chave.
+      apikey: (process.env['CALLMEBOT_APIKEY' + s] || '').trim(),
+    }))
+    .filter((d) => d.phone.length > 1 && d.apikey);
 }
 
 const mascarar = (phone) => '…' + String(phone).replace(/\D/g, '').slice(-4);
