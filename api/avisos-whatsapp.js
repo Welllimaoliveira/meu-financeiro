@@ -118,9 +118,12 @@ async function enviarParaUm(destino, texto) {
     + `&text=${encodeURIComponent(texto)}`
     + `&apikey=${encodeURIComponent(destino.apikey)}`;
   const resp = await fetch(url);
-  const corpo = (await resp.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
-  if (!resp.ok) throw new Error(`CallMeBot respondeu ${resp.status}: ${corpo}`);
-  return corpo;
+  const completo = (await resp.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  // O CallMeBot responde HTTP 200 mesmo quando recusa (ex.: "APIKey is
+  // invalid"), então olhar só o status não basta: confere o texto também.
+  const recusou = /api\s*key is invalid|invalid api\s*key|not (been )?(activated|registered)|^error/i.test(completo);
+  if (!resp.ok || recusou) throw new Error(`CallMeBot recusou (${resp.status}): ${completo.slice(-160)}`);
+  return completo.slice(0, 200);
 }
 
 // Manda pra todo mundo, um de cada vez; se um falhar, os outros ainda recebem.
