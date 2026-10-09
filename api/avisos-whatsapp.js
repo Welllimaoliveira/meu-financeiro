@@ -117,19 +117,45 @@ function destinatarios() {
 
 const mascarar = (phone) => '…' + String(phone).replace(/\D/g, '').slice(-4);
 
-async function enviarParaUm(destino, texto) {
+// Celular brasileiro: o WhatsApp de vários DDDs guarda o número SEM o nono
+// dígito (554184330694 em vez de 5541984330694), e a chave do CallMeBot fica
+// atrelada à forma que o bot viu. Então, se a chave for recusada, tenta
+// também a outra forma do mesmo número.
+function variantesDoNumero(phone) {
+  const d = phone.replace(/\D/g, '');
+  if (/^55\d{2}9\d{8}$/.test(d)) return [phone, '+' + d.slice(0, 4) + d.slice(5)];
+  if (/^55\d{2}[6-9]\d{7}$/.test(d)) return [phone, '+' + d.slice(0, 4) + '9' + d.slice(4)];
+  return [phone];
+}
+
+async function chamarCallMeBot(phone, apikey, texto) {
   const url = 'https://api.callmebot.com/whatsapp.php'
-    + `?phone=${encodeURIComponent(destino.phone)}`
+    + `?phone=${encodeURIComponent(phone)}`
     + `&text=${encodeURIComponent(texto)}`
-    + `&apikey=${encodeURIComponent(destino.apikey)}`;
+    + `&apikey=${encodeURIComponent(apikey)}`;
   const resp = await fetch(url);
   const completo = (await resp.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-  // O CallMeBot responde HTTP 200 mesmo quando recusa (ex.: "APIKey is
+  // O CallMeBot responde HTTP 200/203 mesmo quando recusa (ex.: "APIKey is
   // invalid"), então olhar só o status não basta: confere o texto também.
-  const recusou = /api\s*key is invalid|invalid api\s*key|not (been )?(activated|registered)|^error/i.test(completo);
-  if (!resp.ok || recusou) throw new Error(`CallMeBot recusou (${resp.status}): ${completo.slice(-160)}`);
-  return completo.slice(0, 200);
+  const chaveInvalida = /api\s*key is invalid|invalid api\s*key|not (been )?(activated|registered)/i.test(completo);
+  const recusou = chaveInvalida || /^error/i.test(completo);
+  return { ok: resp.ok && !recusou, chaveInvalida, status: resp.status, completo };
 }
+
+async function enviarParaUm(destino, texto) {
+  let ultimo;
+  for (const phone of variantesDoNumero(destino.phone)) {
+    ultimo = await chamarCallMeBot(phone, destino.apikey, texto);
+    if (ultimo.ok) {
+      const alternativo = phone !== destino.phone;
+      return completo200(ultimo.completo) + (alternativo ? ` [funcionou com ${mascarar(phone)}: o número sem/com o nono dígito]` : '');
+    }
+    if (!ultimo.chaveInvalida) break; // outro tipo de erro: tentar outra forma do número não ajuda
+  }
+  throw new Error(`CallMeBot recusou (${ultimo.status}): ${ultimo.completo.slice(-160)}`);
+}
+
+const completo200 = (s) => s.slice(0, 200);
 
 // Manda pra todo mundo, um de cada vez; se um falhar, os outros ainda recebem.
 async function enviarWhatsApp(texto) {
